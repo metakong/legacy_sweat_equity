@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="B2B field prospecting assistant for an independent Aflac agent — offline-first activity logging, voice journaling, target enrichment, and Dynamics 365 handoff.">
+  <meta name="theme-color" content="#0a0d14">
+  <!-- Internal field tool: must never appear in search results -->
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Prospect">
+  <title>Field Prospecting Assistant</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+
+  <link rel="stylesheet" href="/app/app.css">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/jpeg" href="/icon.jpg">
+  <link rel="apple-touch-icon" href="/icon.jpg">
+</head>
+<body>
+  <div class="app-shell">
+
+    <!-- ============================================================
+         DESKTOP SIDEBAR (>=1024px). Hidden on mobile, where the field
+         log is the entire app.
+         ============================================================ -->
+    <nav class="sidebar" id="sidebar" aria-label="Console sections">
+      <div class="sidebar-brand">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <div>
+          <strong>Field Prospecting</strong>
+          <small>Springfield, MO</small>
+        </div>
+      </div>
+
+      <ul class="nav-list" role="tablist" aria-orientation="vertical">
+        <li>
+          <button class="nav-item active" type="button" role="tab" id="tab-field"
+                  data-view="field" aria-selected="true" aria-controls="view-field">
+            <span class="nav-icon" aria-hidden="true">📍</span> Field Log
+          </button>
+        </li>
+        <li>
+          <button class="nav-item" type="button" role="tab" id="tab-route"
+                  data-view="route" aria-selected="false" aria-controls="view-route">
+            <span class="nav-icon" aria-hidden="true">🗺️</span> Route Planner
+          </button>
+        </li>
+        <li>
+          <button class="nav-item" type="button" role="tab" id="tab-tier1"
+                  data-view="tier1" aria-selected="false" aria-controls="view-tier1">
+            <span class="nav-icon" aria-hidden="true">📋</span> Tier 1 Handoff
+          </button>
+        </li>
+        <li>
+          <button class="nav-item" type="button" role="tab" id="tab-tier23"
+                  data-view="tier23" aria-selected="false" aria-controls="view-tier23">
+            <span class="nav-icon" aria-hidden="true">📤</span> Tier 2/3 Sync
+          </button>
+        </li>
+        <li>
+          <button class="nav-item" type="button" role="tab" id="tab-eod"
+                  data-view="eod" aria-selected="false" aria-controls="view-eod">
+            <span class="nav-icon" aria-hidden="true">🌙</span> EOD AI Debrief
+          </button>
+        </li>
+      </ul>
+
+      <div class="sidebar-foot">
+        <div class="sync-panel" id="sidebarSync">
+          <div>
+            <span>Local Sync Engine</span>
+            <p class="status-text" id="onlineStatusDesktop" role="status">Status: Checking...</p>
+          </div>
+          <span class="sync-badge" id="syncCountDesktop" aria-live="polite">0 Pending</span>
+        </div>
+      </div>
+    </nav>
+
+    <div class="app-container">
+      <header>
+        <h1>AFLAC <span>FIELD PROSPECTING</span></h1>
+      </header>
+
+      <!-- ==========================================================
+           VIEW 1 — FIELD LOG (the whole app on mobile)
+           ========================================================== -->
+      <section class="view active" id="view-field" role="tabpanel" aria-labelledby="tab-field">
+
+        <!-- 3-chip toggle filter above the map for territory exploration -->
+        <div class="map-filter-bar" id="mapFilterBar" role="toolbar" aria-label="Company territory filter">
+          <button class="filter-chip active" type="button" data-filter="all_active" id="chip-all-active">All Active</button>
+          <button class="filter-chip" type="button" data-filter="untouched" id="chip-untouched">Untouched</button>
+          <button class="filter-chip" type="button" data-filter="follow_ups" id="chip-follow-ups">Follow-Ups</button>
+        </div>
+
+        <!-- role="region" rather than "application": the map is informational,
+             and "application" would trap screen readers out of browse mode -->
+        <div id="map" role="region" aria-label="Map showing your current position and nearby prospects"></div>
+
+        <main>
+          <div class="panel sync-panel">
+            <div>
+              <span>Local Sync Engine</span>
+              <p class="status-text" id="onlineStatus" role="status">Status: Checking...</p>
+            </div>
+            <span class="sync-badge" id="syncCount" aria-live="polite">0 Pending</span>
+          </div>
+
+          <div class="panel metrics-panel" aria-live="polite">
+            <div class="metrics-grid">
+              <div class="metric-stat"><span class="metric-val" id="hudDoors">0</span><span class="metric-label">Doors</span></div>
+              <div class="metric-stat"><span class="metric-val" id="hudDMs">0</span><span class="metric-label">DMs Met</span></div>
+              <div class="metric-stat"><span class="metric-val" id="hudAppts">0</span><span class="metric-label">Next Steps</span></div>
+            </div>
+          </div>
+
+          <!-- ---------- TARGET ---------- -->
+          <div class="panel">
+            <h2>🏢 Target Account</h2>
+
+            <div class="form-group">
+              <label for="companyInput">Company Name</label>
+              <input type="text" id="companyInput" placeholder="Ozark Dental Group"
+                     autocomplete="organization" maxlength="200" list="companySuggestions" required>
+              <datalist id="companySuggestions"></datalist>
+              <p class="field-hint" id="companyMatchHint">New account — will be created on save.</p>
+            </div>
+
+            <div class="form-group">
+              <label for="streetInput">Street Address</label>
+              <input type="text" id="streetInput" placeholder="3320 S National Ave"
+                     autocomplete="address-line1" maxlength="200">
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cityInput">City</label>
+                <input type="text" id="cityInput" value="Springfield" autocomplete="address-level2" maxlength="100">
+              </div>
+              <div class="form-group form-group-narrow">
+                <label for="stateInput">State</label>
+                <input type="text" id="stateInput" value="MO" autocomplete="address-level1" maxlength="32">
+              </div>
+              <div class="form-group form-group-zip">
+                <label for="zipInput">ZIP</label>
+                <input type="text" id="zipInput" placeholder="65807" autocomplete="postal-code"
+                       inputmode="numeric" maxlength="20">
+              </div>
+            </div>
+
+            <button class="btn-secondary inspect-btn" id="inspectBtn" type="button">
+              <span class="btn-text">⚡ Inspect Target</span>
+            </button>
+
+            <div class="dossier" id="dossierPanel" hidden aria-live="polite">
+              <div class="next-action-callout" id="nextActionCallout" hidden>
+                <div class="callout-header">⚡ <strong>AI Next Action</strong></div>
+                <p class="callout-body" id="nextActionText"></p>
+              </div>
+              <h3>Pre-Call Dossier</h3>
+              <ul class="dossier-list" id="dossierList"></ul>
+              <details class="dossier-sources" id="dossierSources" hidden>
+                <summary>Sources</summary>
+                <ul id="dossierSourceList"></ul>
+              </details>
+            </div>
+          </div>
+
+          <!-- ---------- 3-TAP BINARY ---------- -->
+          <div class="panel">
+            <h2>⚡ 3-Tap Log</h2>
+
+            <div class="binary-group" role="radiogroup" aria-label="Contact channel">
+              <button class="binary-btn active" type="button" role="radio" aria-checked="true"
+                      data-toggle="is_in_person" data-value="1"><span aria-hidden="true">🚶</span> In-Person</button>
+              <button class="binary-btn" type="button" role="radio" aria-checked="false"
+                      data-toggle="is_in_person" data-value="0"><span aria-hidden="true">📞</span> Phone</button>
+            </div>
+
+            <div class="binary-group" role="radiogroup" aria-label="Touch type">
+              <button class="binary-btn active" type="button" role="radio" aria-checked="true"
+                      data-toggle="is_initial" data-value="1"><span aria-hidden="true">🆕</span> Initial</button>
+              <button class="binary-btn" type="button" role="radio" aria-checked="false"
+                      data-toggle="is_initial" data-value="0"><span aria-hidden="true">🔄</span> Follow-Up</button>
+            </div>
+
+            <div class="binary-group" role="radiogroup" aria-label="Who you reached">
+              <button class="binary-btn active" type="button" role="radio" aria-checked="true"
+                      data-toggle="is_dm_contact" data-value="0"><span aria-hidden="true">🏢</span> Gatekeeper</button>
+              <button class="binary-btn" type="button" role="radio" aria-checked="false"
+                      data-toggle="is_dm_contact" data-value="1"><span aria-hidden="true">🤝</span> DM Met</button>
+            </div>
+
+            <p class="derived-dispo">
+              Records as <strong id="derivedDisposition">Gatekeeper Blocked</strong>
+              <span class="derived-note">— a voice note refines this automatically.</span>
+            </p>
+          </div>
+
+          <!-- ---------- VOICE JOURNAL ---------- -->
+          <div class="panel panel-last">
+            <h2>🎙️ Voice Journal</h2>
+            <div class="voice-bar">
+              <button class="mic-btn" id="micBtn" type="button"
+                      aria-label="Start voice journal recording" aria-pressed="false">🎙️</button>
+              <div class="voice-meta">
+                <span class="rec-timer" id="recTimer">Ready</span>
+                <span class="rec-hint" id="recHint">Mono Opus · transcribed on stop</span>
+              </div>
+            </div>
+            <textarea id="voiceTranscript" rows="4" maxlength="20000"
+                      placeholder="Transcript appears here after recording. You can also type notes directly."></textarea>
+          </div>
+        </main>
+
+        <div class="sticky-bottom-action">
+          <button class="btn-primary" id="saveLogBtn" type="button">
+            <span class="btn-text">Log Activity</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- ==========================================================
+           VIEW 2 — ROUTE PLANNER (desktop)
+           ========================================================== -->
+      <section class="view" id="view-route" role="tabpanel" aria-labelledby="tab-route" hidden>
+        <main class="wide">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>🗺️ Optimized Drive Sequence</h2>
+              <div class="panel-actions">
+                <select id="routeFilterSelect" class="route-filter-select" aria-label="Target filter">
+                  <option value="all_active" selected>All Active</option>
+                  <option value="untouched">Untouched only</option>
+                  <option value="follow_ups">Follow-ups only</option>
+                </select>
+                <button class="btn-secondary btn-inline" id="clusterRouteBtn" type="button" title="Select 11 closest accounts to your location">📍 Cluster 11 Closest</button>
+                <button class="btn-secondary btn-inline" id="refreshTargetsBtn" type="button">Refresh</button>
+              </div>
+            </div>
+            <p class="field-hint">
+              Select up to 12 stops or click <strong>Cluster 11 Closest</strong> to automatically queue nearby accounts starting from your current position.
+            </p>
+
+            <div class="route-layout">
+              <div class="route-picker">
+                <div class="table-scroll">
+                  <table class="data-table" id="targetsTable">
+                    <caption class="visually-hidden">Untouched accounts available for routing</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col" class="col-check">
+                          <input type="checkbox" id="selectAllTargets" aria-label="Select all targets">
+                        </th>
+                        <th scope="col">Company</th>
+                        <th scope="col">Address</th>
+                        <th scope="col">Employees</th>
+                      </tr>
+                    </thead>
+                    <tbody id="targetsBody">
+                      <tr><td colspan="4" class="empty-cell">Loading targets…</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <button class="btn-primary" id="optimizeRouteBtn" type="button">
+                  <span class="btn-text">Generate Route</span>
+                </button>
+              </div>
+
+              <div class="route-result">
+                <div id="routeMap" role="region" aria-label="Map of the optimized route"></div>
+                <div class="route-summary" id="routeSummary" aria-live="polite">
+                  <p class="muted-note">Select targets and generate a route.</p>
+                </div>
+                <ol class="route-steps" id="routeSteps"></ol>
+                <a class="btn-secondary btn-inline" id="openInMapsLink" href="#" target="_blank"
+                   rel="noopener noreferrer" hidden>Open in Google Maps</a>
+              </div>
+            </div>
+          </div>
+        </main>
+      </section>
+
+      <!-- ==========================================================
+           VIEW 3 — TIER 1 CRM HANDOFF (desktop)
+           ========================================================== -->
+      <section class="view" id="view-tier1" role="tabpanel" aria-labelledby="tab-tier1" hidden>
+        <main class="wide">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>📋 Tier 1 — Clipboard Handoff</h2>
+              <div class="panel-actions">
+                <label class="inline-label" for="tier1Date">Business day</label>
+                <input type="date" id="tier1Date">
+                <button class="btn-secondary btn-inline" id="tier1RefreshBtn" type="button">Refresh</button>
+                <button class="btn-primary btn-inline" id="copyAllBtn" type="button">Copy All for D365</button>
+              </div>
+            </div>
+            <p class="field-hint">
+              Copies tab-delimited rows matching the Aflac Dynamics 365 <strong>Open Leads</strong> column
+              order. Paste directly into the grid. Column order is defined in
+              <code>public/app/d365.js</code> — reconcile it with your actual view once.
+            </p>
+
+            <div class="table-scroll">
+              <table class="data-table" id="tier1Table">
+                <caption class="visually-hidden">Today's logged activities</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Time</th>
+                    <th scope="col">Company</th>
+                    <th scope="col">Contact</th>
+                    <th scope="col">Channel</th>
+                    <th scope="col">Disposition</th>
+                    <th scope="col">Rating</th>
+                    <th scope="col">Est. AP</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Copy</th>
+                  </tr>
+                </thead>
+                <tbody id="tier1Body">
+                  <tr><td colspan="9" class="empty-cell">Loading activity…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </main>
+      </section>
+
+      <!-- ==========================================================
+           VIEW 4 — TIER 2/3 SYNC (desktop)
+           ========================================================== -->
+      <section class="view" id="view-tier23" role="tabpanel" aria-labelledby="tab-tier23" hidden>
+        <main class="wide">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>📤 Tier 2 / Tier 3 — File Sync</h2>
+              <div class="panel-actions">
+                <label class="inline-label" for="exportScope">Scope</label>
+                <select id="exportScope">
+                  <option value="today">Today only</option>
+                  <option value="all">All pending</option>
+                </select>
+                <button class="btn-secondary btn-inline" id="exportRefreshBtn" type="button">Refresh</button>
+              </div>
+            </div>
+
+            <div class="tier-grid">
+              <div class="tier-card">
+                <h3>Tier 2 — Existing D365 Leads</h3>
+                <p class="field-hint">
+                  Generates <strong>.xlsx</strong> preserving the
+                  <code>(Do Not Modify)</code> Lead, Row Checksum and Modified On columns
+                  exactly as Dynamics exported them. Without these, re-import fails validation.
+                </p>
+                <p class="tier-count" id="tier2Count">0 accounts</p>
+                <ul class="tier-preview" id="tier2Preview"></ul>
+                <button class="btn-primary" id="exportXlsxBtn" type="button" disabled>
+                  <span class="btn-text">Download .xlsx</span>
+                </button>
+              </div>
+
+              <div class="tier-card">
+                <h3>Tier 3 — Net-New Scouted Leads</h3>
+                <p class="field-hint">
+                  Generates a clean <strong>.csv</strong> for the D365 Import Data wizard.
+                  No checksum columns — these rows have no Dynamics identity yet.
+                </p>
+                <p class="tier-count" id="tier3Count">0 accounts</p>
+                <ul class="tier-preview" id="tier3Preview"></ul>
+                <button class="btn-primary" id="exportCsvBtn" type="button" disabled>
+                  <span class="btn-text">Download .csv</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </section>
+
+      <!-- ==========================================================
+           VIEW 5 — EOD AI DEBRIEF (desktop)
+           ========================================================== -->
+      <section class="view" id="view-eod" role="tabpanel" aria-labelledby="tab-eod" hidden>
+        <main class="wide">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>🌙 End-of-Day AI Debrief</h2>
+              <div class="panel-actions">
+                <label class="inline-label" for="eodDate">Business day</label>
+                <input type="date" id="eodDate">
+                <button class="btn-primary btn-inline" id="eodRunBtn" type="button">
+                  <span class="btn-text">Generate Debrief</span>
+                </button>
+                <button class="btn-secondary btn-inline" id="eodCopyBtn" type="button" disabled>Copy Markdown</button>
+              </div>
+            </div>
+            <p class="field-hint">
+              Reads today's voice-journal notes — the intelligence the Dynamics 365 Open Leads
+              view has nowhere to store — and turns it into a manager-style report. Metrics are
+              computed from the database, not by the model.
+            </p>
+
+            <div class="eod-metrics" id="eodMetrics" hidden aria-live="polite"></div>
+
+            <div class="eod-report" id="eodReport" aria-live="polite">
+              <p class="muted-note">Pick a day and generate the debrief.</p>
+            </div>
+          </div>
+        </main>
+      </section>
+
+    </div>
+  </div>
+
+  <div id="toast-container" role="status" aria-live="polite"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- SheetJS powers Tier 2 .xlsx generation. Desktop-only and loaded lazily
+       by desktop.js, so mobile never pays for it. -->
+  <script type="module" src="/app/app.js"></script>
+</body>
+</html>

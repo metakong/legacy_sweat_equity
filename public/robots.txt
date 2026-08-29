@@ -1,0 +1,7 @@
+# Aflac Field Prospecting Assistant
+# Entirely an internal field tool — there is no public surface. The homeowner
+# lead portal that used to live at / was removed in the B2B pivot, and with it
+# the only page that had any business being indexed.
+
+User-agent: *
+Disallow: /

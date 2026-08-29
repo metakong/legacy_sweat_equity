@@ -1,0 +1,22 @@
+{
+  "id": "/app/",
+  "short_name": "Prospect",
+  "name": "Aflac Field Prospecting Assistant",
+  "description": "Offline-first B2B prospecting assistant for an independent Aflac agent — 3-tap activity logging, voice journaling, target enrichment, and Dynamics 365 handoff.",
+  "icons": [
+    {
+      "src": "/icon.jpg",
+      "type": "image/jpeg",
+      "sizes": "1024x1024",
+      "purpose": "any"
+    }
+  ],
+  "start_url": "/app/",
+  "scope": "/",
+  "background_color": "#000000",
+  "theme_color": "#0a0d14",
+  "display": "standalone",
+  "categories": ["business", "productivity", "utilities"],
+  "lang": "en-US",
+  "dir": "ltr"
+}

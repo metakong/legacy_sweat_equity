@@ -1,0 +1,31 @@
+{
+  "name": "legacy-sweat-equity",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-20",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "legacy-db",
+      "database_id": "847928be-c56f-4de4-bff4-083e08db9140"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "legacysweatequity"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "0 2 * * *"
+    ]
+  },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "routes": [
+    { "pattern": "legacysweatequity.com", "custom_domain": true },
+    { "pattern": "www.legacysweatequity.com", "custom_domain": true }
+  ]
+}

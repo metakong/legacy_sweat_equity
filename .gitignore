@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars
+
+# Secrets & Environment
+.env
+mapbox_token.txt
+
+# PII & Data Exports (CRITICAL FOR PUBLIC REPO)
+*.xlsx
+*.csv
+seed-clean.sql
+temp_batch.sql
+geocode-updates.sql
+geocode-chunk-*.sql
+seed-output.sql
+
+# OS Files
+.DS_Store
+Thumbs.db

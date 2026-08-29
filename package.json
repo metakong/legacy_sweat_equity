@@ -1,0 +1,29 @@
+{
+  "name": "aflac-field-prospecting",
+  "version": "2.0.0",
+  "description": "B2B field prospecting assistant for an independent Aflac agent — offline-first PWA on Cloudflare Workers, D1 and R2, with voice-journal transcription and Dynamics 365 handoff",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "src/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "dev": "node dev-server.js",
+    "test": "node --test test/*.test.js",
+    "db:migrate": "npx wrangler d1 execute legacy-db --remote --file=./schema.sql",
+    "db:migrate:local": "npx wrangler d1 execute legacy-db --local --file=./schema.sql",
+    "db:reset:local": "node -e \"require('fs').rmSync('.local_db.sqlite',{force:true})\"",
+    "wrangler": "node --max-old-space-size=4096 --require ./scripts/workerd-win-arm64-shim.cjs node_modules/wrangler/bin/wrangler.js",
+    "deploy": "npm run wrangler -- deploy",
+    "tail": "npm run wrangler -- tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.112.0",
+    "xlsx": "^0.18.5"
+  },
+  "dependencies": {
+    "hono": "^4.13.5"
+  }
+}
