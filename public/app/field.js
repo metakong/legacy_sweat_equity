@@ -431,39 +431,129 @@ function clearCompanySelection() {
 
 function initCompanySearch() {
   const input = $('companyInput');
-  const list = $('companySuggestions');
-  let debounce;
+  const dropdown = $('customCompanyDropdown');
+  if (!input || !dropdown) return;
+
+  let debounceTimer;
+  let activeIndex = -1;
+
+  const hideDropdown = () => {
+    dropdown.style.display = 'none';
+    dropdown.replaceChildren();
+    activeIndex = -1;
+  };
+
+  const showDropdown = () => {
+    if (dropdown.children.length > 0) {
+      dropdown.style.display = 'block';
+    }
+  };
+
+  const updateActiveSelection = (items) => {
+    items.forEach((item, idx) => {
+      const isSel = idx === activeIndex;
+      item.classList.toggle('is-selected', isSel);
+      item.setAttribute('aria-selected', isSel ? 'true' : 'false');
+      if (isSel) {
+        item.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  };
 
   input.addEventListener('input', () => {
     const query = input.value.trim();
 
-    // Selecting from the datalist fires an `input` event with the full name.
-    const exact = state.suggestions.find((s) => s.company_name.toLowerCase() === query.toLowerCase());
-    if (exact) {
-      applyCompany(exact);
-      return;
+    if (state.selectedCompanyId) {
+      clearCompanySelection();
     }
-    if (state.selectedCompanyId) clearCompanySelection();
 
-    clearTimeout(debounce);
+    clearTimeout(debounceTimer);
+
     if (query.length < 2) {
-      list.replaceChildren();
+      hideDropdown();
       return;
     }
 
-    debounce = setTimeout(async () => {
+    debounceTimer = setTimeout(async () => {
       try {
         const data = await apiFetch(`/api/companies?q=${encodeURIComponent(query)}&limit=8`);
         state.suggestions = data.companies || [];
-        list.replaceChildren(...state.suggestions.map((company) => el('option', {
-          attrs: { value: company.company_name },
-          text: [company.street_1, company.city].filter(Boolean).join(', ')
-        })));
+
+        if (state.suggestions.length === 0) {
+          hideDropdown();
+          return;
+        }
+
+        dropdown.replaceChildren(...state.suggestions.map((company, idx) => {
+          const subtitleParts = [company.street_1, company.city, company.industry].filter(Boolean);
+          const li = el('li', {
+            className: 'autocomplete-item',
+            attrs: {
+              role: 'option',
+              'data-index': String(idx),
+              'aria-selected': 'false'
+            },
+            children: [
+              el('strong', { className: 'autocomplete-name', text: company.company_name }),
+              ...(subtitleParts.length > 0 ? [el('span', { className: 'autocomplete-sub', text: subtitleParts.join(' · ') })] : [])
+            ]
+          });
+
+          // Prevent blur from firing before click
+          li.addEventListener('mousedown', (e) => e.preventDefault());
+          li.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+
+          li.addEventListener('click', (e) => {
+            e.stopPropagation();
+            applyCompany(company);
+            hideDropdown();
+          });
+
+          return li;
+        }));
+
+        activeIndex = -1;
+        showDropdown();
       } catch (err) {
-        // Offline is the normal case here, not an error worth interrupting for.
         console.info('Company lookup unavailable:', err.message);
+        hideDropdown();
       }
-    }, 250);
+    }, 200);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (dropdown.style.display === 'none') return;
+    const items = Array.from(dropdown.querySelectorAll('.autocomplete-item'));
+    if (items.length === 0) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      activeIndex = (activeIndex + 1) % items.length;
+      updateActiveSelection(items);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeIndex = (activeIndex - 1 + items.length) % items.length;
+      updateActiveSelection(items);
+    } else if (e.key === 'Enter') {
+      if (activeIndex >= 0 && activeIndex < state.suggestions.length) {
+        e.preventDefault();
+        applyCompany(state.suggestions[activeIndex]);
+        hideDropdown();
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      hideDropdown();
+    }
+  });
+
+  input.addEventListener('blur', () => {
+    setTimeout(hideDropdown, 180);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+      hideDropdown();
+    }
   });
 }
 

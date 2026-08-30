@@ -120,11 +120,11 @@
           <div class="panel">
             <h2>🏢 Target Account</h2>
 
-            <div class="form-group">
+            <div class="form-group company-autocomplete-wrapper">
               <label for="companyInput">Company Name</label>
               <input type="text" id="companyInput" placeholder="Ozark Dental Group"
-                     autocomplete="organization" maxlength="200" list="companySuggestions" required>
-              <datalist id="companySuggestions"></datalist>
+                     autocomplete="off" maxlength="200" required>
+              <ul id="customCompanyDropdown" class="autocomplete-dropdown" style="display:none;" role="listbox" aria-label="Company suggestions"></ul>
               <p class="field-hint" id="companyMatchHint">New account — will be created on save.</p>
             </div>
 
@@ -288,7 +288,7 @@
 
             <div class="route-layout">
               <div class="route-picker">
-                <div class="table-scroll">
+                <div class="table-responsive table-scroll">
                   <table class="data-table" id="targetsTable">
                     <caption class="visually-hidden">Untouched accounts available for routing</caption>
                     <thead>
@@ -387,7 +387,7 @@
                 <code>public/app/d365.js</code>.
               </p>
 
-              <div class="table-scroll">
+              <div class="table-responsive table-scroll">
                 <table class="data-table" id="tier1Table">
                   <caption class="visually-hidden">Today's logged activities</caption>
                   <thead>

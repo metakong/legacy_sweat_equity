@@ -309,7 +309,78 @@ input[type="checkbox"] {
   border-radius: 5px;
 }
 
+/* ── Touch-Optimized Custom Autocomplete Dropdown ── */
+.company-autocomplete-wrapper {
+  position: relative;
+}
+
+.autocomplete-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: var(--bg-elevated);
+  border: 1px solid var(--card-border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.75);
+  max-height: 250px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  list-style: none;
+  margin-top: 4px;
+  padding: 0;
+}
+
+.autocomplete-item {
+  padding: 0.85rem 1rem;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.25rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--card-border);
+  transition: background 0.15s ease;
+  touch-action: manipulation;
+}
+
+.autocomplete-item:last-child {
+  border-bottom: none;
+}
+
+.autocomplete-item:hover,
+.autocomplete-item:active,
+.autocomplete-item.is-selected {
+  background: rgba(77, 138, 240, 0.18);
+}
+
+.autocomplete-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.autocomplete-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
 /* ── Buttons ──────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0.85rem 1.25rem;
+  font-size: 1rem;
+  font-family: inherit;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
 .btn-primary {
   background: linear-gradient(135deg, var(--accent-gold), var(--accent-gold-hover));
   color: #000;
@@ -330,6 +401,7 @@ input[type="checkbox"] {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  touch-action: manipulation;
 }
 
 .btn-primary:active { transform: scale(0.97); }
@@ -348,7 +420,7 @@ input[type="checkbox"] {
   font-weight: 600;
   border-radius: var(--radius-sm);
   padding: 0.85rem 1.2rem;
-  min-height: var(--touch-target);
+  min-height: 48px;
   font-size: 0.95rem;
   font-family: inherit;
   cursor: pointer;
@@ -358,6 +430,7 @@ input[type="checkbox"] {
   justify-content: center;
   gap: 0.5rem;
   transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+  touch-action: manipulation;
 }
 
 .btn-secondary:hover { background: rgba(77, 138, 240, 0.18); }
@@ -636,6 +709,7 @@ input[type="checkbox"] {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Data tables ──────────────────────────────────── */
+.table-responsive,
 .table-scroll {
   overflow-x: auto;
   border: 1px solid var(--card-border);
@@ -644,6 +718,7 @@ input[type="checkbox"] {
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
   scrollbar-width: thin;
+  width: 100%;
 }
 
 .data-table {
@@ -690,11 +765,11 @@ input[type="checkbox"] {
   cursor: pointer;
   font-size: 1.15rem;
   font-weight: bold;
-  padding: 0.35rem;
+  padding: 0.4rem;
   border-radius: 6px;
   line-height: 1;
-  min-width: 44px;
-  min-height: 44px;
+  min-width: 48px;
+  min-height: 48px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1357,8 +1432,8 @@ input[type="checkbox"] {
   color: var(--text-muted);
   font-size: 0.84rem;
   font-weight: 600;
-  padding: 0.45rem 0.95rem;
-  min-height: 44px;
+  padding: 0.5rem 1rem;
+  min-height: 48px;
   border-radius: 999px;
   cursor: pointer;
   display: inline-flex;
@@ -1485,7 +1560,7 @@ input[type="checkbox"] {
   color: var(--text-main);
   border-radius: var(--radius-sm);
   padding: 0.5rem 0.75rem;
-  min-height: 44px;
+  min-height: 48px;
   font-size: 0.84rem;
   font-weight: 500;
   touch-action: manipulation;
@@ -1533,8 +1608,8 @@ input[type="checkbox"] {
   background: #450a0a;
   color: #fca5a5;
   border: 1px solid #b91c1c;
-  padding: 0.45rem 0.85rem;
-  min-height: 44px;
+  padding: 0.5rem 0.95rem;
+  min-height: 48px;
   border-radius: 99px;
   font-size: 0.82rem;
   font-weight: 600;
@@ -1625,8 +1700,8 @@ input[type="checkbox"] {
   color: var(--text-main);
   border: 1px solid var(--card-border-strong);
   border-radius: 8px;
-  padding: 0.45rem 0.8rem;
-  min-height: 44px;
+  padding: 0.5rem 0.85rem;
+  min-height: 48px;
   font-size: 0.82rem;
   font-weight: 600;
   cursor: pointer;
