@@ -8,6 +8,65 @@
 
 ---
 
+## 2026-08-30 16:28 CDT — Production D1 Migrations & Pipeline CRM Schema Foundation (Agent: Antigravity)
+
+### Session Goal
+Execute production D1 schema migrations for D365 fields, lay the complete Pipeline CRM database foundation (5th Tab), backfill existing records, and deploy updated Worker code.
+
+### Execution Summary
+
+- **Phase 1: D365 Field Migrations (Production D1)**
+  - Executed 3 `ALTER TABLE companies ADD COLUMN` statements against production D1 (`847928be-c56f-4de4-bff4-083e08db9140`):
+    - `sic_code TEXT` — SIC industry classification from D365 imports
+    - `account_number TEXT` — D365 account reference number
+    - `post_enrollment_date TEXT` — post-enrollment tracking date
+  - Verified all 3 columns live via `PRAGMA table_info(companies)` (cid 19–21).
+
+- **Phase 2: Pipeline CRM Schema Expansion (Production D1)**
+  - `activity_logs`: added `next_action_date TEXT`, `next_action_text TEXT`
+  - `companies`: added `pipeline_stage TEXT DEFAULT 'PROSPECT'`, `stage_entered_at TEXT`, `snoozed_until TEXT`, `disqualified_reason TEXT`, `forecast_ap REAL`, `forecast_confidence INTEGER`
+  - Created `pipeline_events` table (audit log for stage transitions): `event_id`, `company_id`, `from_stage`, `to_stage`, `changed_at`, `trigger_log_id`, `reason`
+  - Created 3 indexes: `idx_companies_pipeline(pipeline_stage, snoozed_until)`, `idx_activity_next_action(company_id, next_action_date)`, `idx_pipeline_events_company(company_id, changed_at)`
+  - All 11 DDL statements executed successfully against remote D1. DB size grew 454KB → 475KB.
+
+- **Phase 3: Pipeline Backfill (Production D1)**
+  - Extracted `next_action_date` from `json_extract(ai_structured_notes, '$.next_action_date')` → 1 activity_log row backfilled.
+  - Extracted `next_action` text from `json_extract(ai_structured_notes, '$.next_action')` → 2 activity_log rows backfilled.
+  - Set `pipeline_stage = 'ENGAGED'` for companies with forward-progressing activity → 1 company promoted, 200 remain PROSPECT.
+  - Temporary backfill script (`scripts/pipeline-backfill.js`) executed and deleted.
+
+- **Phase 4: Worker Code Updates (`src/lib/db.js`, `src/routes/activity.js`)**
+  - `normalizeCompany()`: added `pipeline_stage`, `stage_entered_at`, `snoozed_until`, `disqualified_reason`, `forecast_ap`, `forecast_confidence`.
+  - `upsertCompany()`: INSERT expanded to 27 params with 6 new COALESCE columns.
+  - `normalizeActivityLog()`: added `next_action_date`, `next_action_text`.
+  - `upsertActivityLog()`: INSERT expanded to 16 params with COALESCE preservation.
+  - `POST /api/transcribe-and-log`: wired `structured.notes.next_action_date` and `structured.notes.next_action` into the log normalization.
+
+- **Phase 5: Schema Documentation (`schema.sql`)**
+  - Updated `CREATE TABLE companies` with all 6 pipeline columns.
+  - Updated `CREATE TABLE activity_logs` with `next_action_date`, `next_action_text`.
+  - Added `CREATE TABLE pipeline_events` with FK to companies.
+  - Added 3 new `CREATE INDEX` statements.
+  - Replaced old migration comments with full executed-migration documentation.
+
+### Test Results
+- `npm test`: **101/101 pass** (no regressions).
+
+### Deployment
+- `git push origin main` → commit `cb982cd`
+- `npm run deploy` → Version ID `98da7fab-7cab-4de1-9039-6ccbcc8831b3`
+- Worker bundle updated with pipeline-aware `db.js` and `activity.js`
+
+### Pipeline Stage State Machine (for future 5th Tab implementation)
+```
+PROSPECT → ENGAGED → QUALIFIED → PROPOSAL → CLOSED_WON
+                                           → CLOSED_LOST
+              ↕ SNOOZED (time-boxed pause)
+              → DISQUALIFIED (terminal with reason)
+```
+
+---
+
 ## 2026-08-30 16:16 CDT — Critical P0 Architecture Fixes: Cache Invalidation, Data Preservation, Timezone, WCAG (Agent: Antigravity)
 
 ### Session Goal
