@@ -19,7 +19,9 @@ import {
   likePattern,
   RATINGS,
   DISPOSITIONS,
-  LEAD_SOURCES
+  LEAD_SOURCES,
+  PIPELINE_STAGES,
+  STAGE_RANKS
 } from '../src/lib/validate.js';
 
 import {
@@ -30,9 +32,19 @@ import {
   localHourOf
 } from '../src/lib/time.js';
 
-import { normalizeCompany, normalizeActivityLog, normalizeContact, calculateRenewalDate, ValidationError } from '../src/lib/db.js';
+import {
+  normalizeCompany,
+  normalizeActivityLog,
+  normalizeContact,
+  calculateRenewalDate,
+  inferTargetPipelineStage,
+  autoAdvancePipelineStage,
+  transitionPipelineStage,
+  snoozeCompany,
+  ValidationError
+} from '../src/lib/db.js';
 import { computeMetrics, fallbackReport } from '../src/routes/eod.js';
-import { computeTelemetry } from '../src/index.js';
+import { computeTelemetry, app } from '../src/index.js';
 
 // Built from char codes so the literals below never contain a raw control byte.
 const NUL = String.fromCharCode(0);
@@ -812,6 +824,276 @@ test('computeTelemetry handles null DB and empty environment gracefully', async 
   assert.equal(telemetry.metrics.total_activities, 0);
   assert.equal(telemetry.providers.groq, false);
 });
+
+// ---------------------------------------------------------------------
+// PHASE P3: PIPELINE STAGES, AUTO-STAGE INFERENCE & APIS
+// ---------------------------------------------------------------------
+
+test('PIPELINE_STAGES and STAGE_RANKS enforce canonical values and ordering', () => {
+  assert.deepEqual(PIPELINE_STAGES, [
+    'PROSPECT',
+    'ENGAGED',
+    'QUALIFIED',
+    'PROPOSAL',
+    'CLOSED_WON',
+    'CLOSED_LOST',
+    'DISQUALIFIED'
+  ]);
+
+  assert.equal(matchEnum('engaged', PIPELINE_STAGES), 'ENGAGED');
+  assert.equal(matchEnum('proposal', PIPELINE_STAGES), 'PROPOSAL');
+  assert.equal(matchEnum('unknown_stage', PIPELINE_STAGES), null);
+
+  assert.ok(STAGE_RANKS['PROSPECT'] < STAGE_RANKS['ENGAGED']);
+  assert.ok(STAGE_RANKS['ENGAGED'] < STAGE_RANKS['QUALIFIED']);
+  assert.ok(STAGE_RANKS['QUALIFIED'] < STAGE_RANKS['PROPOSAL']);
+  assert.ok(STAGE_RANKS['PROPOSAL'] < STAGE_RANKS['CLOSED_WON']);
+});
+
+test('inferTargetPipelineStage enforces the 5 Opus forward-only rules', () => {
+  // Rule 1: 'Information Left' or 'Gatekeeper Blocked' + PROSPECT -> ENGAGED
+  assert.equal(inferTargetPipelineStage('PROSPECT', 'Information Left', 0), 'ENGAGED');
+  assert.equal(inferTargetPipelineStage('PROSPECT', 'Gatekeeper Blocked', 0), 'ENGAGED');
+  assert.equal(inferTargetPipelineStage('QUALIFIED', 'Information Left', 0), null); // No backward demotion
+
+  // Rule 2: is_dm_contact = 1 + < QUALIFIED -> QUALIFIED
+  assert.equal(inferTargetPipelineStage('PROSPECT', 'Follow-Up Scheduled', 1), 'QUALIFIED');
+  assert.equal(inferTargetPipelineStage('ENGAGED', 'Follow-Up Scheduled', 1), 'QUALIFIED');
+  assert.equal(inferTargetPipelineStage('QUALIFIED', 'Follow-Up Scheduled', 1), null);
+
+  // Rule 3: Presentation Scheduled -> PROPOSAL
+  assert.equal(inferTargetPipelineStage('PROSPECT', 'Presentation Scheduled', 0), 'PROPOSAL');
+  assert.equal(inferTargetPipelineStage('QUALIFIED', 'Presentation Scheduled', 1), 'PROPOSAL');
+
+  // Rule 4: Enrolled -> CLOSED_WON
+  assert.equal(inferTargetPipelineStage('PROSPECT', 'Enrolled', 1), 'CLOSED_WON');
+  assert.equal(inferTargetPipelineStage('PROPOSAL', 'Enrolled', 1), 'CLOSED_WON');
+
+  // Rule 5: Not Interested -> CLOSED_LOST
+  assert.equal(inferTargetPipelineStage('PROSPECT', 'Not Interested', 0), 'CLOSED_LOST');
+  assert.equal(inferTargetPipelineStage('PROPOSAL', 'Not Interested', 1), 'CLOSED_LOST');
+});
+
+test('autoAdvancePipelineStage advances stage and records pipeline_events audit trail', async () => {
+  let updatedStage = null;
+  let insertedEvent = null;
+
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          return {
+            async first() {
+              if (sql.includes('pipeline_stage FROM companies')) {
+                return { pipeline_stage: 'PROSPECT' };
+              }
+              return null;
+            },
+            async run() {
+              if (sql.includes('UPDATE companies') && sql.includes('pipeline_stage')) {
+                updatedStage = args[0];
+              }
+              if (sql.includes('pipeline_events')) {
+                insertedEvent = {
+                  event_id: args[0],
+                  company_id: args[1],
+                  from_stage: args[2],
+                  to_stage: args[3],
+                  trigger_log_id: args[4],
+                  reason: args[5]
+                };
+              }
+              return { success: true };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const res = await autoAdvancePipelineStage(mockDb, 'comp-101', 'ENGAGED', 'log-999', 'First contact');
+  assert.ok(res);
+  assert.equal(res.from_stage, 'PROSPECT');
+  assert.equal(res.to_stage, 'ENGAGED');
+  assert.equal(updatedStage, 'ENGAGED');
+  assert.ok(insertedEvent);
+  assert.equal(insertedEvent.company_id, 'comp-101');
+  assert.equal(insertedEvent.from_stage, 'PROSPECT');
+  assert.equal(insertedEvent.to_stage, 'ENGAGED');
+  assert.equal(insertedEvent.trigger_log_id, 'log-999');
+});
+
+test('transitionPipelineStage and snoozeCompany mutate state and validate inputs', async () => {
+  let updatedCompany = {};
+  let auditEvent = {};
+
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          return {
+            async first() {
+              if (sql.includes('pipeline_stage') && sql.includes('companies')) {
+                return { pipeline_stage: 'ENGAGED', forecast_ap: null, forecast_confidence: null };
+              }
+              if (sql.includes('company_id FROM companies')) {
+                return { company_id: 'comp-101' };
+              }
+              return null;
+            },
+            async run() {
+              if (sql.includes('UPDATE companies') && sql.includes('pipeline_stage')) {
+                updatedCompany.stage = args[0];
+                updatedCompany.forecast_ap = args[1];
+                updatedCompany.forecast_confidence = args[2];
+                updatedCompany.disqualified_reason = args[3];
+              }
+              if (sql.includes('UPDATE companies') && sql.includes('snoozed_until')) {
+                updatedCompany.snoozed_until = args[0];
+              }
+              if (sql.includes('pipeline_events')) {
+                auditEvent = { from_stage: args[2], to_stage: args[3], reason: args[4] };
+              }
+              return { success: true };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  // Stage transition
+  const stageRes = await transitionPipelineStage(mockDb, {
+    companyId: 'comp-101',
+    toStage: 'PROPOSAL',
+    reason: 'Executive agreed to quote',
+    forecastAp: '$4,200',
+    forecastConfidence: 75
+  });
+
+  assert.equal(stageRes.to_stage, 'PROPOSAL');
+  assert.equal(stageRes.from_stage, 'ENGAGED');
+  assert.equal(stageRes.forecast_ap, 4200);
+  assert.equal(stageRes.forecast_confidence, 75);
+  assert.equal(updatedCompany.stage, 'PROPOSAL');
+  assert.equal(auditEvent.to_stage, 'PROPOSAL');
+
+  // Snooze
+  const snoozeRes = await snoozeCompany(mockDb, 'comp-101', '2026-09-15');
+  assert.equal(snoozeRes.snoozed_until, '2026-09-15');
+  assert.equal(updatedCompany.snoozed_until, '2026-09-15');
+});
+
+test('/api/pipeline endpoints require x-api-key authentication', async () => {
+  // Missing API key -> 401
+  const unauthRes = await app.request('/api/pipeline', {
+    method: 'GET'
+  });
+  assert.equal(unauthRes.status, 401);
+
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind() {
+          return {
+            async all() {
+              return {
+                results: [
+                  {
+                    company_id: 'comp-1',
+                    company_name: 'Test Corp',
+                    pipeline_stage: 'QUALIFIED',
+                    days_in_stage: 5,
+                    touch_count: 2
+                  }
+                ]
+              };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  // Valid API key -> 200 with pipeline payload
+  const authRes = await app.request('/api/pipeline', {
+    method: 'GET',
+    headers: {
+      'x-api-key': 'LEGACY_EDGE_KEY_2026'
+    }
+  }, { DB: mockDb });
+
+  assert.equal(authRes.status, 200);
+  const data = await authRes.json();
+  assert.equal(data.success, true);
+  assert.equal(Array.isArray(data.pipeline), true);
+  assert.equal(data.pipeline.length, 1);
+  assert.equal(data.pipeline[0].company_name, 'Test Corp');
+});
+
+test('POST /api/pipeline/stage and /api/pipeline/snooze process valid JSON mutations', async () => {
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          return {
+            async first() {
+              if (sql.includes('pipeline_stage') && sql.includes('companies')) {
+                return { pipeline_stage: 'ENGAGED', forecast_ap: null, forecast_confidence: null };
+              }
+              if (sql.includes('company_id FROM companies')) {
+                return { company_id: 'comp-1' };
+              }
+              return null;
+            },
+            async run() {
+              return { success: true };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  // POST /api/pipeline/stage
+  const stageRes = await app.request('/api/pipeline/stage', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': 'LEGACY_EDGE_KEY_2026'
+    },
+    body: JSON.stringify({
+      company_id: 'comp-1',
+      to_stage: 'QUALIFIED',
+      forecast_ap: 5000,
+      forecast_confidence: 80
+    })
+  }, { DB: mockDb });
+
+  assert.equal(stageRes.status, 200);
+  const stageData = await stageRes.json();
+  assert.equal(stageData.success, true);
+  assert.equal(stageData.to_stage, 'QUALIFIED');
+
+  // POST /api/pipeline/snooze
+  const snoozeRes = await app.request('/api/pipeline/snooze', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': 'LEGACY_EDGE_KEY_2026'
+    },
+    body: JSON.stringify({
+      company_id: 'comp-1',
+      until: '2026-09-30'
+    })
+  }, { DB: mockDb });
+
+  assert.equal(snoozeRes.status, 200);
+  const snoozeData = await snoozeRes.json();
+  assert.equal(snoozeData.success, true);
+  assert.equal(snoozeData.snoozed_until, '2026-09-30');
+});
+
 
 
 

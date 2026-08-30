@@ -16,6 +16,8 @@ import {
   DISPOSITIONS,
   LEAD_SOURCES,
   SYNC_TIERS,
+  PIPELINE_STAGES,
+  STAGE_RANKS,
   cleanCapped,
   matchEnum,
   toBool,
@@ -195,6 +197,153 @@ export async function setCompanyRenewalDate(db, companyId, renewalDate) {
     .bind(date, companyId)
     .run();
   return date;
+}
+
+// ---------------------------------------------------------------------
+// PIPELINE STATE TRANSITIONS & INFERENCE
+// ---------------------------------------------------------------------
+
+/**
+ * Deduce target pipeline stage based on the touch outcome and contact status.
+ * Returns the target canonical stage or null if no advancement is indicated.
+ */
+export function inferTargetPipelineStage(currentStage, disposition, isDmContact) {
+  const cur = currentStage || 'PROSPECT';
+  const curRank = STAGE_RANKS[cur] || 1;
+
+  if (disposition === 'Enrolled') {
+    return 'CLOSED_WON';
+  }
+  if (disposition === 'Not Interested') {
+    return 'CLOSED_LOST';
+  }
+  if (disposition === 'Disqualified') {
+    return 'DISQUALIFIED';
+  }
+  if (disposition === 'Presentation Scheduled') {
+    if (curRank < STAGE_RANKS['PROPOSAL']) {
+      return 'PROPOSAL';
+    }
+  }
+  if (toBool(isDmContact) === 1) {
+    if (curRank < STAGE_RANKS['QUALIFIED']) {
+      return 'QUALIFIED';
+    }
+  }
+  if (['Information Left', 'Gatekeeper Blocked'].includes(disposition)) {
+    if (cur === 'PROSPECT') {
+      return 'ENGAGED';
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Update company pipeline stage and record an audit event in pipeline_events,
+ * enforcing forward-only transitions (unless transitioning to a terminal state).
+ */
+export async function autoAdvancePipelineStage(db, companyId, targetStage, logId = null, reason = 'Auto-inferred from field touch') {
+  const canonicalStage = matchEnum(targetStage, PIPELINE_STAGES);
+  if (!canonicalStage || !companyId || !db) return null;
+
+  const current = await db.prepare(
+    'SELECT pipeline_stage FROM companies WHERE company_id = ? LIMIT 1'
+  ).bind(companyId).first();
+
+  if (!current) return null;
+
+  const fromStage = current.pipeline_stage || 'PROSPECT';
+  const fromRank = STAGE_RANKS[fromStage] || 1;
+  const toRank = STAGE_RANKS[canonicalStage] || 1;
+
+  const isTerminal = ['CLOSED_WON', 'CLOSED_LOST', 'DISQUALIFIED'].includes(canonicalStage);
+  if (fromStage === canonicalStage) return null;
+  if (!isTerminal && toRank <= fromRank) return null;
+
+  const eventId = crypto.randomUUID();
+
+  await db.prepare(`
+    UPDATE companies
+    SET pipeline_stage = ?,
+        stage_entered_at = datetime('now')
+    WHERE company_id = ?
+  `).bind(canonicalStage, companyId).run();
+
+  await db.prepare(`
+    INSERT INTO pipeline_events (event_id, company_id, from_stage, to_stage, changed_at, trigger_log_id, reason)
+    VALUES (?, ?, ?, ?, datetime('now'), ?, ?)
+  `).bind(eventId, companyId, fromStage, canonicalStage, logId, reason).run();
+
+  return { event_id: eventId, company_id: companyId, from_stage: fromStage, to_stage: canonicalStage };
+}
+
+/**
+ * Explicit/manual pipeline state mutation endpoint helper.
+ */
+export async function transitionPipelineStage(db, { companyId, toStage, reason = null, forecastAp = null, forecastConfidence = null }) {
+  const canonicalStage = matchEnum(toStage, PIPELINE_STAGES);
+  if (!canonicalStage) throw new ValidationError(`Invalid pipeline stage. Must be one of: ${PIPELINE_STAGES.join(', ')}`);
+  if (!companyId) throw new ValidationError('company_id is required');
+
+  const current = await db.prepare(
+    'SELECT pipeline_stage, forecast_ap, forecast_confidence FROM companies WHERE company_id = ? LIMIT 1'
+  ).bind(companyId).first();
+
+  if (!current) throw new ValidationError('Company not found');
+
+  const fromStage = current.pipeline_stage || 'PROSPECT';
+  const eventId = crypto.randomUUID();
+
+  const validatedAp = asMoney(forecastAp);
+  const validatedConf = asCount(forecastConfidence, 100);
+  const cleanReason = cleanCapped(reason, 200);
+
+  await db.prepare(`
+    UPDATE companies
+    SET pipeline_stage = ?,
+        stage_entered_at = datetime('now'),
+        forecast_ap = COALESCE(?, forecast_ap),
+        forecast_confidence = COALESCE(?, forecast_confidence),
+        disqualified_reason = ?
+    WHERE company_id = ?
+  `).bind(
+    canonicalStage,
+    validatedAp,
+    validatedConf,
+    canonicalStage === 'DISQUALIFIED' ? cleanReason : null,
+    companyId
+  ).run();
+
+  await db.prepare(`
+    INSERT INTO pipeline_events (event_id, company_id, from_stage, to_stage, changed_at, trigger_log_id, reason)
+    VALUES (?, ?, ?, ?, datetime('now'), NULL, ?)
+  `).bind(eventId, companyId, fromStage, canonicalStage, cleanReason).run();
+
+  return {
+    event_id: eventId,
+    company_id: companyId,
+    from_stage: fromStage,
+    to_stage: canonicalStage,
+    forecast_ap: validatedAp !== null ? validatedAp : current.forecast_ap,
+    forecast_confidence: validatedConf !== null ? validatedConf : current.forecast_confidence,
+    reason: cleanReason
+  };
+}
+
+/**
+ * Snooze a company until a given date. Passing null or empty string un-snoozes.
+ */
+export async function snoozeCompany(db, companyId, untilDate) {
+  if (!companyId) throw new ValidationError('company_id is required');
+  const until = untilDate ? asIsoDate(untilDate) : null;
+  if (untilDate && !until) throw new ValidationError('Invalid date format for until (YYYY-MM-DD expected)');
+
+  const exists = await db.prepare('SELECT company_id FROM companies WHERE company_id = ? LIMIT 1').bind(companyId).first();
+  if (!exists) throw new ValidationError('Company not found');
+
+  await db.prepare('UPDATE companies SET snoozed_until = ? WHERE company_id = ?').bind(until, companyId).run();
+  return { company_id: companyId, snoozed_until: until };
 }
 
 // ---------------------------------------------------------------------

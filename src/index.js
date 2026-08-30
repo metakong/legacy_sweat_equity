@@ -34,6 +34,7 @@ import enrichRouter from './routes/enrich.js';
 import eodRouter from './routes/eod.js';
 import routingRouter from './routes/routing.js';
 import exportsRouter from './routes/exports.js';
+import pipelineRouter from './routes/pipeline.js';
 import { classifyIndustry } from './lib/ai.js';
 
 const app = new Hono();
@@ -113,6 +114,7 @@ app.route('/api/enrich', enrichRouter);
 app.route('/api/eod-debrief', eodRouter);
 app.route('/api/route', routingRouter);
 app.route('/api/export', exportsRouter);
+app.route('/api/pipeline', pipelineRouter);
 app.route('/api/audio', audioRouter);
 app.route('/api/activity', activityRouter);
 
@@ -334,8 +336,7 @@ export default {
   }
 };
 
-// Re-exported for dev-server.js (which serves static files without going
-// through the Worker) and for the test suite.
+export { app };
 export { SECURITY_HEADERS, CONTENT_SECURITY_POLICY } from './lib/security.js';
 export { businessDate, businessDayRangeUtc, toSqlTimestamp, toLocalStamp } from './lib/time.js';
 export { cleanText, deriveDisposition, matchEnum, parseJsonLoose, RATINGS, DISPOSITIONS } from './lib/validate.js';

@@ -53,7 +53,7 @@ export const CONTENT_SECURITY_POLICY = [
  * this list.
  */
 export function allowedOrigins(env, url) {
-  const configured = (env.ALLOWED_ORIGINS || '')
+  const configured = (env?.ALLOWED_ORIGINS || '')
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean);

@@ -39,6 +39,8 @@ import {
   setCompanyRating,
   setCompanyRenewalDate,
   calculateRenewalDate,
+  inferTargetPipelineStage,
+  autoAdvancePipelineStage,
   companyExists
 } from '../lib/db.js';
 import { businessDate, businessDayRangeUtc } from '../lib/time.js';
@@ -320,6 +322,16 @@ root.post('/transcribe-and-log', async (c) => {
     await setCompanyRenewalDate(c.env.DB, companyId, renewalDate);
   }
 
+  // Auto-advance pipeline stage
+  try {
+    const targetStage = inferTargetPipelineStage(null, log.disposition, log.is_dm_contact);
+    if (targetStage) {
+      await autoAdvancePipelineStage(c.env.DB, companyId, targetStage, log.log_id, `Auto-advanced on touch (${log.disposition})`);
+    }
+  } catch (err) {
+    console.error('Auto-advance pipeline stage failed (non-fatal):', err);
+  }
+
   return c.json({
     success: true,
     degraded,
@@ -400,6 +412,16 @@ async function writeQueuedLog(env, entry) {
   if (log.disposition === 'Enrolled') {
     const renewalDate = calculateRenewalDate(log.enrollment_date, log.timestamp?.slice(0, 10));
     await setCompanyRenewalDate(env.DB, companyId, renewalDate);
+  }
+
+  // Auto-advance pipeline stage
+  try {
+    const targetStage = inferTargetPipelineStage(null, log.disposition, log.is_dm_contact);
+    if (targetStage) {
+      await autoAdvancePipelineStage(env.DB, companyId, targetStage, log.log_id, `Auto-advanced on touch (${log.disposition})`);
+    }
+  } catch (err) {
+    console.error('Auto-advance pipeline stage failed (non-fatal):', err);
   }
 
   return { log_id: log.log_id, company_id: companyId, contact_id: contactId, disposition: log.disposition };

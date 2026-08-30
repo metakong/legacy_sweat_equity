@@ -103,6 +103,32 @@ export const LEAD_SOURCES = [
  */
 export const SYNC_TIERS = ['PENDING', 'TIER1_COPIED', 'TIER2_EXPORTED', 'TIER3_EXPORTED', 'SYNCED'];
 
+/**
+ * CRM Pipeline Stages for B2B deal-flow state machine.
+ */
+export const PIPELINE_STAGES = [
+  'PROSPECT',
+  'ENGAGED',
+  'QUALIFIED',
+  'PROPOSAL',
+  'CLOSED_WON',
+  'CLOSED_LOST',
+  'DISQUALIFIED'
+];
+
+/**
+ * Progressive rank weights enforcing forward-only pipeline state advancement.
+ */
+export const STAGE_RANKS = {
+  'PROSPECT': 1,
+  'ENGAGED': 2,
+  'QUALIFIED': 3,
+  'PROPOSAL': 4,
+  'CLOSED_WON': 5,
+  'CLOSED_LOST': 5,
+  'DISQUALIFIED': 5
+};
+
 /** Case-insensitive enum match that returns the canonical casing, or null. */
 export const matchEnum = (value, allowed) => {
   if (typeof value !== 'string') return null;

@@ -8,6 +8,42 @@
 
 ---
 
+## 2026-08-30 17:28 CDT — Phase P3: CRM Pipeline Core APIs, State Mutation Endpoints, and Auto-Stage Inference Engine (Agent: Antigravity)
+
+### Session Goal
+Implement Phase P3 CRM pipeline reachability: build `GET /api/pipeline` CTE query endpoint, stage mutation (`POST /api/pipeline/stage`) and snooze (`POST /api/pipeline/snooze`) endpoints with full audit trail logging into `pipeline_events`, and implement the forward-only auto-stage inference engine on touch write.
+
+### Execution Summary
+
+- **Phase 1: Pipeline Core API (`src/routes/pipeline.js` & `src/index.js`)**
+  - Created `src/routes/pipeline.js` with `GET /api/pipeline` implementing SQLite CTEs (`latest` touch with `ROW_NUMBER()` partition + `agg` touch stats).
+  - Calculates `days_in_stage` dynamically using `businessDate()` in `America/Chicago`.
+  - Filters out snoozed accounts (`snoozed_until <= today` or null) by default, with `?stage=` and `?include_snoozed=1` filter support.
+  - Mounted router in `src/index.js` under `/api/pipeline`, secured by the global `x-api-key` middleware.
+
+- **Phase 2: Pipeline State Mutation Endpoints (`src/routes/pipeline.js` & `src/lib/validate.js`)**
+  - `src/lib/validate.js`: Added `PIPELINE_STAGES` enum (`['PROSPECT', 'ENGAGED', 'QUALIFIED', 'PROPOSAL', 'CLOSED_WON', 'CLOSED_LOST', 'DISQUALIFIED']`) and `STAGE_RANKS` hierarchy weights.
+  - `src/lib/db.js`: Implemented `transitionPipelineStage()` and `snoozeCompany()` database helpers.
+  - `src/routes/pipeline.js`: Added `POST /api/pipeline/stage` and `POST /api/pipeline/snooze` handlers, logging state change audits to `pipeline_events`.
+
+- **Phase 3: Auto-Stage Inference on Log Write (`src/routes/activity.js` & `src/lib/db.js`)**
+  - `src/lib/db.js`: Implemented `inferTargetPipelineStage()` and `autoAdvancePipelineStage()` with forward-only rank enforcement:
+    1. `Information Left` or `Gatekeeper Blocked` + `PROSPECT` → `ENGAGED`
+    2. `is_dm_contact = 1` + < `QUALIFIED` → `QUALIFIED`
+    3. `Presentation Scheduled` → `PROPOSAL`
+    4. `Enrolled` → `CLOSED_WON`
+    5. `Not Interested` → `CLOSED_LOST`
+  - `src/routes/activity.js`: Wired auto-stage inference into `POST /api/transcribe-and-log` and `writeQueuedLog()` to advance accounts on every voice, silent, or offline sync touch.
+
+- **Phase 4: Test Suite & Security Hardening**
+  - `src/lib/security.js`: Added optional chaining (`env?.ALLOWED_ORIGINS`) to prevent unhandled exceptions on empty/null env invocations.
+  - `test/worker.test.js`: Added comprehensive unit tests for `PIPELINE_STAGES`, `inferTargetPipelineStage()`, `autoAdvancePipelineStage()`, `transitionPipelineStage()`, `snoozeCompany()`, and `/api/pipeline` authentication & mutation endpoints.
+
+### Test Results
+- `npm test`: **107/107 passed** cleanly (100% pass rate).
+
+---
+
 ## 2026-08-30 17:22 CDT — P2 Friction Eradication: GPS Nearest Account, Manual Funnel Chips & Mobile UX (Agent: Antigravity)
 
 ### Session Goal
