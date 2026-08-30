@@ -602,6 +602,114 @@ test('classifyIndustry correctly categorizes tricky commercial and civic edge ca
   }
 });
 
+test('calculateEpv weights high-risk industries and distance correctly', async () => {
+  const { calculateEpv, getIndustryMultiplier } = await import('../src/routes/routing.js');
+
+  // Construction (2.0x) with 20 employees at 0.5 mi
+  // Score: (20 * 2.0) / (0.5 + 0.5) = 40.0
+  const scoreConstruction = calculateEpv({ employees: 20, industry: 'Construction & Trades' }, 0.5);
+  assert.equal(scoreConstruction, 40.0);
+
+  // Professional Services (1.0x) with 20 employees at 0.5 mi
+  // Score: (20 * 1.0) / (0.5 + 0.5) = 20.0
+  const scoreProfessional = calculateEpv({ employees: 20, industry: 'Professional & Tech Services' }, 0.5);
+  assert.equal(scoreProfessional, 20.0);
+
+  // Default fallback employees (5) and distance (1.0 mi)
+  // Score: (5 * 1.0) / (1.0 + 0.5) = 5 / 1.5 = 3.3
+  const scoreDefault = calculateEpv({}, null);
+  assert.equal(scoreDefault, 3.3);
+
+  // High multiplier check
+  assert.equal(getIndustryMultiplier('Construction & Trades'), 2.0);
+  assert.equal(getIndustryMultiplier('Manufacturing'), 1.8);
+  assert.equal(getIndustryMultiplier('Healthcare & Medical'), 1.6);
+  assert.equal(getIndustryMultiplier('NonExistent'), 1.0);
+});
+
+test('getRecommendedProducts maps industry categories to primary Aflac products', async () => {
+  const { getRecommendedProducts } = await import('../src/routes/enrich.js');
+
+  assert.deepEqual(getRecommendedProducts('Construction & Trades'), ['Accident', 'Short-Term Disability', 'Life']);
+  assert.deepEqual(getRecommendedProducts('Healthcare & Medical'), ['Hospital Indemnity', 'Critical Illness', 'Dental/Vision']);
+  assert.deepEqual(getRecommendedProducts('Manufacturing'), ['Short-Term Disability', 'Critical Illness', 'Accident']);
+  assert.deepEqual(getRecommendedProducts('Unknown Industry'), ['Accident', 'Short-Term Disability', 'Hospital Indemnity']);
+});
+
+test('findExistingContact and upsertContact deduplicate contacts on company_id and normalized names', async () => {
+  const { findExistingContact, upsertContact } = await import('../src/lib/db.js');
+
+  // Mock DB with prepare/bind/first/run
+  const storedContacts = new Map();
+
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          return {
+            async first() {
+              if (sql.includes('SELECT contact_id FROM contacts')) {
+                const [companyId, fn, ln] = args;
+                for (const [id, c] of storedContacts.entries()) {
+                  if (c.company_id === companyId &&
+                      (c.first_name || '').toLowerCase() === (fn || '').toLowerCase() &&
+                      (c.last_name || '').toLowerCase() === (ln || '').toLowerCase()) {
+                    return { contact_id: id };
+                  }
+                }
+                return null;
+              }
+              return null;
+            },
+            async run() {
+              if (sql.includes('INSERT INTO contacts')) {
+                const [id, company_id, first_name, last_name, job_title, phone_number, email_address, is_primary_dm] = args;
+                storedContacts.set(id, {
+                  contact_id: id, company_id, first_name, last_name, job_title,
+                  phone_number, email_address, is_primary_dm
+                });
+                return { success: true };
+              }
+              return { success: true };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  // 1. First insert creates contact-1
+  const contact1 = {
+    contact_id: 'contact-uuid-1',
+    company_id: 'comp-100',
+    first_name: 'John',
+    last_name: 'Doe',
+    job_title: 'Owner',
+    phone_number: '417-555-0100',
+    email_address: 'john@example.com',
+    is_primary_dm: 1
+  };
+  const id1 = await upsertContact(mockDb, contact1);
+  assert.equal(id1, 'contact-uuid-1');
+  assert.equal(storedContacts.size, 1);
+
+  // 2. Second insert with matching name but newly generated random UUID should reuse existing contact_id
+  const contact2 = {
+    contact_id: 'contact-uuid-2-random',
+    company_id: 'comp-100',
+    first_name: ' john ',
+    last_name: 'DOE',
+    job_title: 'Managing Director',
+    phone_number: '417-555-0199',
+    email_address: 'jdoe@example.com',
+    is_primary_dm: 1
+  };
+  const id2 = await upsertContact(mockDb, contact2);
+  assert.equal(id2, 'contact-uuid-1', 'Should reuse existing contact_id rather than duplicating');
+  assert.equal(storedContacts.size, 1, 'Total contact count should remain 1');
+});
+
+
 
 
 

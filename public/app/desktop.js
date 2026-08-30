@@ -25,13 +25,57 @@ import {
 import { renderMarkdown } from './markdown.js';
 import { cacheDossier } from './store.js';
 
-const MAX_ROUTE_STOPS = 12;
+const MAX_ROUTE_STOPS = 24;
+const MAX_LEG_STOPS = 12;
+
+/**
+ * Expected Premium Value (EPV) industry risk multipliers for B2B prospecting.
+ * Higher multipliers (1.5x - 2.0x) weight blue-collar, high-injury and high-benefit-yield sectors.
+ */
+export const INDUSTRY_MULTIPLIERS = {
+  'Construction & Trades': 2.0,
+  'Manufacturing': 1.8,
+  'Transportation & Logistics': 1.7,
+  'Healthcare & Medical': 1.6,
+  'Automotive & Dealerships': 1.5,
+  'Agriculture & Forestry': 1.5,
+  'Mining & Extraction': 1.5,
+  'Hospitality & Food Service': 1.3,
+  'Wholesale & Distribution': 1.3,
+  'Utilities & Communications': 1.3,
+  'Real Estate': 1.1,
+  'Retail Trade': 1.1,
+  'Personal & Consumer Services': 1.1,
+  'Entertainment & Recreation': 1.1,
+  'Education & Schools': 1.0,
+  'Professional & Tech Services': 1.0,
+  'Finance & Insurance': 1.0,
+  'Civic & Public Admin': 1.0,
+  'Other Commercial': 1.0
+};
+
+export function getIndustryMultiplier(industry) {
+  if (!industry || typeof industry !== 'string') return 1.0;
+  return INDUSTRY_MULTIPLIERS[industry.trim()] || 1.0;
+}
+
+export function calculateEpv(target, distanceMiles) {
+  const employees = (target?.employees !== null && target?.employees !== undefined && Number(target.employees) > 0)
+    ? Number(target.employees)
+    : 5;
+  const mult = getIndustryMultiplier(target?.industry);
+  const dist = (distanceMiles !== null && distanceMiles !== undefined && Number.isFinite(distanceMiles))
+    ? distanceMiles
+    : 1.0;
+  const score = (employees * mult) / (dist + 0.5);
+  return Math.round(score * 10) / 10;
+}
 
 let masterRouteTargets = [];
 let userCoords = null;
 let currentlyRenderedTargets = [];
 let skippedTargets = new Set();
-let sortColumn = 'distance'; // 'distance' | 'employees'
+let sortColumn = 'distance'; // 'distance' | 'epv' | 'employees'
 let sortOrder = 'asc';       // 'asc' | 'desc'
 
 const desktopState = {
@@ -42,7 +86,9 @@ const desktopState = {
   eodMarkdown: '',
   routeMap: null,
   routeLayer: null,
-  routeStart: null
+  routeStart: null,
+  routeLegs: null,
+  activeLeg: 1
 };
 
 /** Haversine straight-line distance in miles. */
@@ -80,7 +126,7 @@ function getQuadrant(userLat, userLon, targetLat, targetLon) {
 async function loadTargets() {
   const body = $('targetsBody');
   body.replaceChildren(el('tr', {
-    children: [el('td', { className: 'empty-cell', text: 'Loading targets…', attrs: { colspan: '6' } })]
+    children: [el('td', { className: 'empty-cell', text: 'Loading targets…', attrs: { colspan: '7' } })]
   }));
 
   try {
@@ -92,16 +138,20 @@ async function loadTargets() {
     const valid = (data.companies || []).filter((t) => t.lat !== null && t.long !== null);
     const missingCoords = (data.companies || []).length - valid.length;
 
-    // Calculate distance and compass quadrant for each target
-    masterRouteTargets = valid.map((target) => ({
-      ...target,
-      distance: (userCoords && target.lat !== null && target.long !== null)
+    // Calculate distance, EPV score, and compass quadrant for each target
+    masterRouteTargets = valid.map((target) => {
+      const distance = (userCoords && target.lat !== null && target.long !== null)
         ? haversineMiles(userCoords, target)
-        : null,
-      quadrant: (userCoords && target.lat !== null && target.long !== null)
-        ? getQuadrant(userCoords.lat, userCoords.long, target.lat, target.long)
-        : null
-    }));
+        : null;
+      return {
+        ...target,
+        distance,
+        epv: calculateEpv(target, distance),
+        quadrant: (userCoords && target.lat !== null && target.long !== null)
+          ? getQuadrant(userCoords.lat, userCoords.long, target.lat, target.long)
+          : null
+      };
+    });
 
     desktopState.targets = masterRouteTargets;
 
@@ -113,7 +163,7 @@ async function loadTargets() {
     }
   } catch (err) {
     body.replaceChildren(el('tr', {
-      children: [el('td', { className: 'empty-cell', text: `Could not load targets: ${err.message}`, attrs: { colspan: '6' } })]
+      children: [el('td', { className: 'empty-cell', text: `Could not load targets: ${err.message}`, attrs: { colspan: '7' } })]
     }));
   }
 }
@@ -131,12 +181,13 @@ async function refreshGpsLocation() {
     masterRouteTargets.forEach((target) => {
       if (target.lat !== null && target.long !== null) {
         target.distance = haversineMiles(userCoords, target);
+        target.epv = calculateEpv(target, target.distance);
         target.quadrant = getQuadrant(userCoords.lat, userCoords.long, target.lat, target.long);
       }
     });
 
     renderRouteTable();
-    showToast('GPS location & distances updated.', 'success');
+    showToast('GPS location & EPV scores updated.', 'success');
   } catch (err) {
     showToast(`Location error: ${err.message}`, 'error');
   } finally {
@@ -160,11 +211,17 @@ function renderRouteTable() {
 
   // Update header indicators
   const distTh = $('sortDistance');
+  const epvTh = $('sortEpv');
   const empTh = $('sortEmployees');
   if (distTh) {
     distTh.textContent = sortColumn === 'distance'
       ? `Dist. 📍 ${sortOrder === 'asc' ? '▲' : '▼'}`
       : 'Dist. 📍';
+  }
+  if (epvTh) {
+    epvTh.textContent = sortColumn === 'epv'
+      ? `EPV 💎 ${sortOrder === 'desc' ? '▼' : '▲'}`
+      : 'EPV 💎';
   }
   if (empTh) {
     empTh.textContent = sortColumn === 'employees'
@@ -205,6 +262,15 @@ function renderRouteTable() {
 
   // 2. Sort
   filtered.sort((a, b) => {
+    if (sortColumn === 'epv') {
+      const epvA = a.epv !== null && a.epv !== undefined ? a.epv : (sortOrder === 'desc' ? -Infinity : Infinity);
+      const epvB = b.epv !== null && b.epv !== undefined ? b.epv : (sortOrder === 'desc' ? -Infinity : Infinity);
+      if (epvA !== epvB) {
+        return sortOrder === 'desc' ? (epvB - epvA) : (epvA - epvB);
+      }
+      return a.company_name.localeCompare(b.company_name);
+    }
+
     if (sortColumn === 'employees') {
       const rawA = a.employees !== null && a.employees !== undefined ? parseInt(a.employees, 10) : NaN;
       const rawB = b.employees !== null && b.employees !== undefined ? parseInt(b.employees, 10) : NaN;
@@ -239,7 +305,7 @@ function renderRouteTable() {
       children: [el('td', {
         className: 'empty-cell',
         text: 'No targets match your current filters.',
-        attrs: { colspan: '6', style: 'text-align:center; padding: 2rem; color: #6b7280;' }
+        attrs: { colspan: '7', style: 'text-align:center; padding: 2rem; color: #6b7280;' }
       })]
     }));
     updateSelectAllCheckboxState();
@@ -261,10 +327,13 @@ function renderRouteTable() {
       if (checkbox.checked) {
         if (desktopState.selectedTargets.size >= MAX_ROUTE_STOPS) {
           checkbox.checked = false;
-          showToast(`Mapbox optimizes at most ${MAX_ROUTE_STOPS} stops per route.`, 'error');
+          showToast(`Staging accepts at most ${MAX_ROUTE_STOPS} stops across 2 legs.`, 'error');
           return;
         }
         desktopState.selectedTargets.add(target.company_id);
+        if (desktopState.selectedTargets.size > MAX_LEG_STOPS) {
+          showToast(`Selected ${desktopState.selectedTargets.size} targets (will stage into Morning & Afternoon 12-stop legs).`, 'info');
+        }
       } else {
         desktopState.selectedTargets.delete(target.company_id);
       }
@@ -273,6 +342,10 @@ function renderRouteTable() {
 
     const distText = target.distance !== null
       ? `${target.distance.toFixed(1)} mi${target.quadrant ? ` (${target.quadrant})` : ''}`
+      : '—';
+
+    const epvText = target.epv !== null && target.epv !== undefined
+      ? `${target.epv.toFixed(1)}`
       : '—';
 
     const skipBtn = el('button', {
@@ -301,6 +374,7 @@ function renderRouteTable() {
         td(target.company_name),
         td([target.street_1, target.city].filter(Boolean).join(', ')),
         td(distText),
+        el('td', { children: [el('span', { className: 'pill pill-epv', text: epvText, attrs: { title: `EPV Score: ${epvText} (Industry risk multiplier: ${getIndustryMultiplier(target.industry)}x)` } })] }),
         td(target.employees ?? '—'),
         el('td', { className: 'col-skip', children: [skipBtn] })
       ]
@@ -343,7 +417,7 @@ function resizeRouteMap() {
   setTimeout(() => desktopState.routeMap.invalidateSize(), 250);
 }
 
-function renderRoute(result) {
+function renderRoute(result, legTitle = null) {
   const summary = $('routeSummary');
   const steps = $('routeSteps');
 
@@ -354,10 +428,12 @@ function renderRoute(result) {
     'single-stop': 'single stop'
   }[result.provider] || result.provider;
 
+  const titlePrefix = legTitle ? `[${legTitle}] ` : '';
+
   summary.replaceChildren(
     el('p', {
       className: 'route-headline',
-      text: `${result.sequence.length} stops · ${result.distance_miles} mi · ~${result.duration_minutes} min`
+      text: `${titlePrefix}${result.sequence.length} stops · ${result.distance_miles} mi · ~${result.duration_minutes} min`
     }),
     el('p', { className: 'muted-note', text: `Optimized via ${providerLabel}.` })
   );
@@ -404,6 +480,7 @@ function renderRoute(result) {
     if (waypoints) url.searchParams.set('waypoints', waypoints);
     url.searchParams.set('travelmode', 'driving');
     link.href = url.toString();
+    link.textContent = legTitle ? `Open ${legTitle} in Google Maps` : 'Open in Google Maps';
     link.hidden = false;
   } else {
     link.hidden = true;
@@ -434,6 +511,38 @@ function renderRoute(result) {
   }
 }
 
+function updateLegButtonsUi() {
+  const morningBtn = $('legMorningBtn');
+  const afternoonBtn = $('legAfternoonBtn');
+  if (!morningBtn || !afternoonBtn) return;
+
+  morningBtn.classList.toggle('active', desktopState.activeLeg === 1);
+  afternoonBtn.classList.toggle('active', desktopState.activeLeg === 2);
+}
+
+function initLegSwitcher() {
+  const morningBtn = $('legMorningBtn');
+  const afternoonBtn = $('legAfternoonBtn');
+
+  if (morningBtn) {
+    morningBtn.addEventListener('click', () => {
+      if (!desktopState.routeLegs?.leg1) return;
+      desktopState.activeLeg = 1;
+      updateLegButtonsUi();
+      renderRoute(desktopState.routeLegs.leg1, 'Morning Leg (1–12)');
+    });
+  }
+
+  if (afternoonBtn) {
+    afternoonBtn.addEventListener('click', () => {
+      if (!desktopState.routeLegs?.leg2) return;
+      desktopState.activeLeg = 2;
+      updateLegButtonsUi();
+      renderRoute(desktopState.routeLegs.leg2, 'Afternoon Leg (13–24)');
+    });
+  }
+}
+
 async function clusterRoute() {
   if (currentlyRenderedTargets.length === 0) {
     showToast('No active targets in current filter to cluster.', 'error');
@@ -446,6 +555,21 @@ async function clusterRoute() {
 
   renderRouteTable();
   showToast(`Queued ${closest.length} closest targets from current view.`, 'success');
+}
+
+async function clusterEpv() {
+  if (currentlyRenderedTargets.length === 0) {
+    showToast('No active targets in current filter to cluster.', 'error');
+    return;
+  }
+
+  desktopState.selectedTargets.clear();
+  const sortedByEpv = [...currentlyRenderedTargets].sort((a, b) => (b.epv || 0) - (a.epv || 0));
+  const topEpv = sortedByEpv.slice(0, 12);
+  topEpv.forEach((target) => desktopState.selectedTargets.add(target.company_id));
+
+  renderRouteTable();
+  showToast(`Queued ${topEpv.length} top-EPV targets from current view.`, 'success');
 }
 
 function initRouteTab() {
@@ -499,6 +623,19 @@ function initRouteTab() {
     });
   }
 
+  const sortEpvTh = $('sortEpv');
+  if (sortEpvTh) {
+    sortEpvTh.addEventListener('click', () => {
+      if (sortColumn === 'epv') {
+        sortOrder = sortOrder === 'desc' ? 'asc' : 'desc';
+      } else {
+        sortColumn = 'epv';
+        sortOrder = 'desc';
+      }
+      renderRouteTable();
+    });
+  }
+
   const sortEmpTh = $('sortEmployees');
   if (sortEmpTh) {
     sortEmpTh.addEventListener('click', () => {
@@ -517,11 +654,18 @@ function initRouteTab() {
     clusterBtn.addEventListener('click', clusterRoute);
   }
 
+  const clusterEpvBtn = $('clusterEpvBtn');
+  if (clusterEpvBtn) {
+    clusterEpvBtn.addEventListener('click', clusterEpv);
+  }
+
+  initLegSwitcher();
+
   $('selectAllTargets').addEventListener('change', (event) => {
     if (event.target.checked) {
       currentlyRenderedTargets.slice(0, MAX_ROUTE_STOPS).forEach((t) => desktopState.selectedTargets.add(t.company_id));
       if (currentlyRenderedTargets.length > MAX_ROUTE_STOPS) {
-        showToast(`Selected the first ${MAX_ROUTE_STOPS} — that is the optimizer's ceiling.`, 'info');
+        showToast(`Selected the first ${MAX_ROUTE_STOPS} stops across 2 legs.`, 'info');
       }
     } else {
       currentlyRenderedTargets.forEach((t) => desktopState.selectedTargets.delete(t.company_id));
@@ -540,10 +684,40 @@ function initRouteTab() {
     setButtonBusy(button, true, 'Optimizing…');
     try {
       const start = await currentPosition();
-      const result = await apiPost('/api/route/optimize', { company_ids: ids, start });
-      renderRoute(result);
-      if (result.unroutable?.length) {
-        showToast(`${result.unroutable.length} stop(s) skipped — no coordinates.`, 'info');
+
+      if (ids.length <= MAX_LEG_STOPS) {
+        // Single leg route (1-12 stops)
+        const result = await apiPost('/api/route/optimize', { company_ids: ids, start });
+        desktopState.routeLegs = { leg1: result, leg2: null };
+        desktopState.activeLeg = 1;
+        const legBar = $('routeLegBar');
+        if (legBar) legBar.style.display = 'none';
+        renderRoute(result);
+        if (result.unroutable?.length) {
+          showToast(`${result.unroutable.length} stop(s) skipped — no coordinates.`, 'info');
+        }
+      } else {
+        // Multi-leg route (13-24 stops split into Morning & Afternoon legs)
+        const leg1Ids = ids.slice(0, MAX_LEG_STOPS);
+        const leg2Ids = ids.slice(MAX_LEG_STOPS, MAX_ROUTE_STOPS);
+
+        const result1 = await apiPost('/api/route/optimize', { company_ids: leg1Ids, start });
+        const lastStop1 = result1.sequence?.[result1.sequence.length - 1];
+        const leg2Start = lastStop1 && lastStop1.lat !== undefined && lastStop1.long !== undefined
+          ? { lat: lastStop1.lat, long: lastStop1.long }
+          : start;
+
+        const result2 = await apiPost('/api/route/optimize', { company_ids: leg2Ids, start: leg2Start });
+
+        desktopState.routeLegs = { leg1: result1, leg2: result2 };
+        desktopState.activeLeg = 1;
+
+        const legBar = $('routeLegBar');
+        if (legBar) legBar.style.display = 'flex';
+        updateLegButtonsUi();
+
+        renderRoute(result1, 'Morning Leg (1–12)');
+        showToast(`Staged 2-leg route: ${result1.sequence.length + result2.sequence.length} stops total.`, 'success');
       }
     } catch (err) {
       showToast(err.message, 'error');

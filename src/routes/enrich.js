@@ -14,17 +14,47 @@ const enrich = new Hono();
 
 const BULLET_LABELS = ['Executives', 'Headcount', 'Industry Hook'];
 
-const SYSTEM_PROMPT = `You brief an independent Aflac insurance agent immediately before a cold B2B walk-in. You read raw web search results and return exactly three markdown bullets, in this order and with these exact labels:
+export const INDUSTRY_PRODUCT_RECOMMENDATIONS = {
+  'Construction & Trades': ['Accident', 'Short-Term Disability', 'Life'],
+  'Manufacturing': ['Short-Term Disability', 'Critical Illness', 'Accident'],
+  'Transportation & Logistics': ['Accident', 'Short-Term Disability', 'Life'],
+  'Healthcare & Medical': ['Hospital Indemnity', 'Critical Illness', 'Dental/Vision'],
+  'Automotive & Dealerships': ['Accident', 'Short-Term Disability', 'Hospital Indemnity'],
+  'Hospitality & Food Service': ['Short-Term Disability', 'Accident', 'Dental/Vision'],
+  'Professional & Tech Services': ['Short-Term Disability', 'Life', 'Dental/Vision'],
+  'Wholesale & Distribution': ['Accident', 'Short-Term Disability', 'Life'],
+  'Utilities & Communications': ['Accident', 'Short-Term Disability', 'Critical Illness'],
+  'Agriculture & Forestry': ['Accident', 'Short-Term Disability', 'Life'],
+  'Mining & Extraction': ['Accident', 'Short-Term Disability', 'Critical Illness'],
+  'Real Estate': ['Short-Term Disability', 'Life', 'Dental/Vision'],
+  'Personal & Consumer Services': ['Short-Term Disability', 'Accident', 'Dental/Vision'],
+  'Retail Trade': ['Short-Term Disability', 'Accident', 'Dental/Vision'],
+  'Education & Schools': ['Short-Term Disability', 'Critical Illness', 'Cancer'],
+  'Entertainment & Recreation': ['Accident', 'Short-Term Disability', 'Life'],
+  'Finance & Insurance': ['Short-Term Disability', 'Life', 'Dental/Vision'],
+  'Civic & Public Admin': ['Cancer', 'Critical Illness', 'Short-Term Disability'],
+  'Other Commercial': ['Accident', 'Short-Term Disability', 'Hospital Indemnity']
+};
+
+export function getRecommendedProducts(industry) {
+  if (!industry || typeof industry !== 'string') return INDUSTRY_PRODUCT_RECOMMENDATIONS['Other Commercial'];
+  return INDUSTRY_PRODUCT_RECOMMENDATIONS[industry.trim()] || INDUSTRY_PRODUCT_RECOMMENDATIONS['Other Commercial'];
+}
+
+function buildEnrichSystemPrompt(recommendedProducts = []) {
+  const prodStr = recommendedProducts.length > 0 ? recommendedProducts.join(', ') : 'Accident, Short-Term Disability, Hospital Indemnity';
+  return `You brief an independent Aflac insurance agent immediately before a cold B2B walk-in. You read raw web search results and return exactly three markdown bullets, in this order and with these exact labels:
 
 - **Executives:** named decision makers and their titles (owner, president, HR director, office manager). Prefer the person who would sign off on a voluntary-benefits offering.
 - **Headcount:** employee count or a tight range, plus the basis for it. Aflac needs 3+ W-2 employees, so state whether that bar is clearly met.
-- **Industry Hook:** the single most useful conversation opener — a recent expansion, hiring push, award, new location, or an industry-specific risk that supplemental accident or disability coverage speaks to.
+- **Industry Hook:** the single most useful conversation opener — a recent expansion, hiring push, award, new location, or an industry-specific risk that speaks directly to primary Aflac voluntary products (${prodStr}) via Section 125 payroll pre-taxing.
 
 Hard rules:
 - Output ONLY the three bullets. No preamble, no heading, no closing line.
 - One or two sentences per bullet. This is read on a phone screen.
 - If the search results do not support a bullet, write "Not found in public sources." — never guess a name, a number, or an event.
 - Never state a fact the search results do not contain.`;
+}
 
 /**
  * Body: { company_name, address?, street_1?, city?, state?, zip_code?, company_id? }
@@ -98,11 +128,14 @@ enrich.post('/', async (c) => {
     ...search.results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`)
   ].filter(Boolean).join('\n');
 
+  const industry = cleanCapped(body?.industry, LIMITS.industry);
+  const recommendedProducts = getRecommendedProducts(industry);
+
   let markdown;
   try {
     markdown = await chatCompletion(c.env, {
       model: c.env.OPENROUTER_ENRICH_MODEL || DEFAULT_MODELS.enrich,
-      system: SYSTEM_PROMPT,
+      system: buildEnrichSystemPrompt(recommendedProducts),
       user: context.slice(0, 14000),
       maxTokens: 500,
       temperature: 0.2
@@ -129,7 +162,6 @@ enrich.post('/', async (c) => {
   const companyId = asId(body?.company_id);
   if (companyId) {
     const employees = asCount(extractHeadcount(bullets), 5_000_000);
-    const industry = cleanCapped(body?.industry, LIMITS.industry);
     const leadSource = matchEnum(body?.lead_source, LEAD_SOURCES);
     if (employees !== null || industry || leadSource) {
       await c.env.DB.prepare(`
@@ -147,6 +179,7 @@ enrich.post('/', async (c) => {
     company_name: companyName,
     dossier,
     bullets,
+    recommended_products: recommendedProducts,
     sources: search.results.map((r) => ({ title: r.title, url: r.url }))
   }, 200, { 'Cache-Control': 'no-store' });
 });

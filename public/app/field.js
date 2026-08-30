@@ -259,6 +259,50 @@ function renderProductInterests(rawInterests) {
   }
 }
 
+export const OBJECTION_BATTLECARDS = [
+  {
+    pattern: /major med|health ins|already offer|already have health|full benefits|good health/i,
+    title: 'Major Medical Gap Rebuttal',
+    script: '"Major medical protects the hospital and doctors, but Aflac pays cash directly to the employee to cover high deductibles, copays, and household bills while off work. Plus, Section 125 payroll pre-taxing saves the company $76.50 in FICA for every $1,000 enrolled."',
+    hook: '⚡ Section 125 FICA Tax Reduction + Out-of-Pocket Gap Buffer'
+  },
+  {
+    pattern: /already have aflac|already offer aflac|colonial|allstate|voluntary/i,
+    title: 'Existing Voluntary Provider Rebuttal',
+    script: '"That\'s excellent — it shows your leadership values supplemental protection. When was your last account review or re-enrollment? We frequently service neglected accounts, update newer riders, and streamline electronic payroll deductions at zero cost."',
+    hook: '⚡ Account Service Review + Updated Accident/Disability Riders'
+  },
+  {
+    pattern: /no payroll|payroll slot|admin|too busy|burden|paperwork/i,
+    title: 'Administrative Ease Rebuttal',
+    script: '"We handle 100% of the employee enrollment, claims, and policy servicing ourselves. Our direct payroll deduction integrates seamlessly with any payroll software with zero setup fees or administrative hassle."',
+    hook: '⚡ 100% Agent Serviced + Zero Administrative Cost'
+  },
+  {
+    pattern: /won't buy|not interested|employees don't want|too expensive|can't afford/i,
+    title: 'Zero Employer Cost Rebuttal',
+    script: '"Because this is 100% voluntary and employee-funded, there is zero financial liability to the business. If even two employees want it, they receive group discounted rates and the company locks in payroll tax savings."',
+    hook: '⚡ Zero Employer Cost + Pre-Tax Group Discount'
+  },
+  {
+    pattern: /broker|agent handles|exclusive broker|consultant/i,
+    title: 'Broker Complement Rebuttal',
+    script: '"We don\'t replace your major medical broker or health plan. Aflac works alongside any broker as a voluntary gap layer that offsets high deductibles without interfering with existing broker relationships."',
+    hook: '⚡ Non-Disruptive Voluntary Bridge Layer'
+  }
+];
+
+export function getObjectionBattlecard(objectionText) {
+  if (!objectionText || typeof objectionText !== 'string') return null;
+  const match = OBJECTION_BATTLECARDS.find((b) => b.pattern.test(objectionText));
+  if (match) return match;
+  return {
+    title: 'Tactical Value Rebuttal',
+    script: '"Aflac provides voluntary employee-paid benefits with zero net cost to the employer, funded through Section 125 pre-tax payroll deductions that reduce employer FICA liability by 7.65%."',
+    hook: '⚡ Section 125 Pre-Tax Payroll Savings'
+  };
+}
+
 function renderObjections(rawObjections) {
   const container = $('objectionTagContainer');
   if (!container) return;
@@ -276,10 +320,52 @@ function renderObjections(rawObjections) {
   }
 
   if (objections.length > 0) {
-    container.replaceChildren(...objections.map((obj) => el('span', {
-      className: 'objection-tag',
-      text: `🚫 ${obj}`
-    })));
+    let activeCardIndex = null;
+
+    const render = () => {
+      container.replaceChildren();
+
+      const tagsWrapper = el('div', {
+        className: 'objection-tags-row',
+        style: 'display: flex; flex-wrap: wrap; gap: 0.5rem; width: 100%;'
+      });
+
+      objections.forEach((obj, idx) => {
+        const isExpanded = activeCardIndex === idx;
+        const tag = el('span', {
+          className: `objection-tag${isExpanded ? ' is-active' : ''}`,
+          text: `🚫 ${obj} ${isExpanded ? '▲' : '💡'}`,
+          attrs: { title: 'Click to view tactical 15-second rebuttal battlecard' }
+        });
+
+        tag.addEventListener('click', (e) => {
+          e.stopPropagation();
+          activeCardIndex = (activeCardIndex === idx) ? null : idx;
+          render();
+        });
+
+        tagsWrapper.appendChild(tag);
+      });
+
+      container.appendChild(tagsWrapper);
+
+      if (activeCardIndex !== null && objections[activeCardIndex]) {
+        const battlecard = getObjectionBattlecard(objections[activeCardIndex]);
+        if (battlecard) {
+          const cardEl = el('div', {
+            className: 'objection-battlecard',
+            children: [
+              el('div', { className: 'battlecard-title', text: `🎯 ${battlecard.title} (Re: "${objections[activeCardIndex]}")` }),
+              el('div', { className: 'battlecard-script', text: battlecard.script }),
+              el('div', { className: 'battlecard-hook', text: battlecard.hook })
+            ]
+          });
+          container.appendChild(cardEl);
+        }
+      }
+    };
+
+    render();
     container.hidden = false;
     $('dossierPanel').hidden = false;
   } else {
@@ -438,7 +524,7 @@ function initInspect() {
   });
 }
 
-function renderDossier({ bullets = [], sources = [], next_action, product_interests, objections, error }) {
+function renderDossier({ bullets = [], sources = [], next_action, product_interests, recommended_products, objections, error }) {
   const panel = $('dossierPanel');
   const list = $('dossierList');
   panel.hidden = false;
@@ -449,6 +535,8 @@ function renderDossier({ bullets = [], sources = [], next_action, product_intere
 
   if (product_interests) {
     renderProductInterests(product_interests);
+  } else if (recommended_products) {
+    renderProductInterests(recommended_products);
   }
 
   if (objections) {
@@ -492,7 +580,7 @@ function renderDossier({ bullets = [], sources = [], next_action, product_intere
 }
 
 // ---------------------------------------------------------------------
-// 3-TAP BINARY
+// 3-TAP BINARY & QUICK-LOG MACROS
 // ---------------------------------------------------------------------
 
 /**
@@ -503,6 +591,53 @@ function renderDossier({ bullets = [], sources = [], next_action, product_intere
 function derivedDisposition({ is_in_person, is_initial, is_dm_contact }) {
   if (!is_dm_contact) return is_in_person ? 'Gatekeeper Blocked' : 'No Contact';
   return is_initial ? 'Information Left' : 'Follow-Up Scheduled';
+}
+
+export function setBinaryToggles(inPerson, initial, dmContact) {
+  state.binary = {
+    is_in_person: Number(inPerson),
+    is_initial: Number(initial),
+    is_dm_contact: Number(dmContact)
+  };
+
+  const updateGroup = (key, val) => {
+    document.querySelectorAll(`.binary-btn[data-toggle="${key}"]`).forEach((btn) => {
+      const isActive = Number(btn.dataset.value) === val;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-checked', String(isActive));
+    });
+  };
+
+  updateGroup('is_in_person', state.binary.is_in_person);
+  updateGroup('is_initial', state.binary.is_initial);
+  updateGroup('is_dm_contact', state.binary.is_dm_contact);
+
+  const dispo = derivedDisposition(state.binary);
+  const dispoEl = $('derivedDisposition');
+  if (dispoEl) dispoEl.textContent = dispo;
+  return dispo;
+}
+
+function initQuickLogMacros() {
+  document.querySelectorAll('.quick-log-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.quick-log-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      setTimeout(() => btn.classList.remove('active'), 1500);
+
+      const preset = btn.dataset.preset;
+      if (preset === 'flyer_dropped') {
+        setBinaryToggles(1, 1, 0);
+        showToast('Macro: In-Person · Initial · Gatekeeper (Information Left)', 'info');
+      } else if (preset === 'gatekeeper_block') {
+        setBinaryToggles(1, 0, 0);
+        showToast('Macro: In-Person · Gatekeeper Blocked', 'info');
+      } else if (preset === 'dm_followup') {
+        setBinaryToggles(1, 0, 1);
+        showToast('Macro: In-Person · DM Met (Follow-Up Scheduled)', 'info');
+      }
+    });
+  });
 }
 
 function initBinaryToggles() {
@@ -782,6 +917,7 @@ export function initFieldView() {
   initMap();
   initCompanySearch();
   initInspect();
+  initQuickLogMacros();
   initBinaryToggles();
   initMic();
   initSave();

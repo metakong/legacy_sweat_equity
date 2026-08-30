@@ -8,6 +8,31 @@
 
 ---
 
+## 2026-08-30 14:35 CDT — CSO/QA Roadmap Implementation: EPV Routing, Objection Battlecards, Deduplication & Multi-Leg Staging (Agent: Antigravity)
+
+### Session Goal
+Implement the 5-phase CSO/QA audit roadmap to maximize prospecting efficiency, Expected Premium Value (EPV) route yields, pre-call battlecard intelligence, composite contact deduplication, and multi-leg route staging.
+
+### Execution Summary
+- **Phase 1: Expected Premium Value (EPV) Route Prioritization (`src/routes/routing.js`, `public/app/desktop.js`, `public/app/index.html`)**:
+  - Implemented EPV calculation: $\text{EPV} = \frac{\max(\text{Employees}, 5) \times \text{IndustryRiskMultiplier}}{\text{Distance} + 0.5}$.
+  - Added `INDUSTRY_MULTIPLIERS` dictionary assigning $1.5\times$ to $2.0\times$ risk weights to high-margin voluntary benefit sectors (Construction, Manufacturing, Transportation, Healthcare, Dealerships).
+  - Added `#sortEpv` header click toggle and `EPV 💎` badge column to the Route Planner table.
+  - Added `#clusterEpvBtn` (`💎 Top EPV`) button to automatically queue the highest expected value prospects in view.
+- **Phase 2: Interactive Objection Battlecards & Underwriting Triggers (`public/app/field.js`, `public/app/app.css`, `src/routes/enrich.js`)**:
+  - Refactored `.objection-tag` pills in the Field Log to be interactive: tapping an objection expands a tactical 15-second counter-script (e.g. Major Medical Gap, Section 125 FICA savings, Administrative Ease, Broker Complement).
+  - Updated `src/routes/enrich.js` with `INDUSTRY_PRODUCT_RECOMMENDATIONS` and dynamic system prompt builder tailoring pre-call hooks to primary Aflac products for the target's industry.
+- **Phase 3: Composite Key Contact Deduplication (`src/lib/db.js`)**:
+  - Added `findExistingContact(db, companyId, firstName, lastName)` checking `(company_id, LOWER(TRIM(first_name)), LOWER(TRIM(last_name)))`.
+  - Updated `upsertContact()` to reuse the existing `contact_id` on name match so imports and touch logs update rather than create duplicate contact rows.
+- **Phase 4: Field Velocity Enhancements (`public/app/field.js`, `public/app/index.html`, `public/app/app.css`, `public/app/desktop.js`, `src/lib/validate.js`)**:
+  - Added 1-tap Express Log presets (`📄 Flyer Dropped`, `🏢 Gatekeeper Block`, `🤝 DM Follow-Up`) above the 3-Tap toggles.
+  - Raised route stops ceiling to 24 and implemented Multi-Leg Route Staging: splits batches > 12 into Morning Leg (1–12) and Afternoon Leg (13–24) with interactive leg switcher and Google Maps navigation.
+- **Phase 5: Automated Testing & Dual Synchronization**:
+  - Added comprehensive unit tests in `test/worker.test.js` covering EPV math, industry multipliers, contact deduplication, and product recommendations (98 tests passing).
+
+---
+
 ## 2026-08-30 13:25 CDT — Classification Heuristics Tightening & Regression Suite (Agent: Antigravity)
 
 ### Session Goal

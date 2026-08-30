@@ -1391,13 +1391,151 @@ input[type="checkbox"] {
   background: #450a0a;
   color: #fca5a5;
   border: 1px solid #b91c1c;
-  padding: 0.15rem 0.6rem;
+  padding: 0.2rem 0.65rem;
   border-radius: 99px;
   font-size: 0.75rem;
   font-weight: 600;
   display: inline-flex;
   align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+}
+
+.objection-tag:hover {
+  background: #7f1d1d;
+  color: #ffffff;
+  border-color: #ef4444;
+  transform: translateY(-1px);
+}
+
+.objection-tag.is-active {
+  background: #991b1b;
+  color: #ffffff;
+  border-color: #f87171;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.35);
+}
+
+.objection-battlecard {
+  margin-top: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  background: linear-gradient(135deg, rgba(69, 10, 10, 0.65), rgba(30, 41, 59, 0.7));
+  border: 1px solid #b91c1c;
+  border-left: 4px solid #ef4444;
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+.battlecard-title {
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #fca5a5;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.battlecard-script {
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: #f1f5f9;
+  font-style: italic;
+}
+
+.battlecard-hook {
+  font-size: 0.75rem;
+  color: var(--accent-gold);
+  font-weight: 600;
+  margin-top: 0.15rem;
+}
+
+/* ── Quick-Log Macro Presets ──────────────────────── */
+.quick-log-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.9rem;
+  padding: 0.5rem 0.65rem;
+  background: rgba(77, 138, 240, 0.06);
+  border: 1px dashed rgba(77, 138, 240, 0.25);
+  border-radius: var(--radius-sm);
+}
+
+.quick-log-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+}
+
+.quick-log-btn {
+  background: var(--bg-inset);
+  color: var(--text-main);
+  border: 1px solid var(--card-border-strong);
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
   gap: 0.25rem;
+}
+
+.quick-log-btn:hover {
+  border-color: var(--accent);
+  background: rgba(77, 138, 240, 0.12);
+  color: #ffffff;
+}
+
+.quick-log-btn:active, .quick-log-btn.active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+  box-shadow: 0 0 12px rgba(77, 138, 240, 0.3);
+  transform: scale(0.96);
+}
+
+/* ── Multi-Leg Route Staging ──────────────────────── */
+.route-leg-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.route-leg-btn {
+  flex: 1;
+  background: var(--bg-inset);
+  color: var(--text-muted);
+  border: 1px solid var(--card-border);
+  padding: 0.45rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+
+.route-leg-btn:hover {
+  color: var(--text-main);
+  border-color: var(--card-border-strong);
+}
+
+.route-leg-btn.active {
+  background: rgba(77, 138, 240, 0.15);
+  color: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 10px rgba(77, 138, 240, 0.15);
 }
 
 /* ── Mobile Bottom Navigation Bar (100% Feature Parity) ── */

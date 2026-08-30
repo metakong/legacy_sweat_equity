@@ -54,7 +54,7 @@ export const LIMITS = {
   checksum: 256,
   searchQuery: 200,
   syncBatch: 100,
-  routeStops: 12,          // Mapbox Optimization v1 hard ceiling
+  routeStops: 24,          // Up to 24 stops for multi-leg route staging (12 per leg)
   audioBytes: 20 * 1024 * 1024,
   dossierChars: 2000
 };

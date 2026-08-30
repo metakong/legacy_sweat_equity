@@ -197,7 +197,46 @@ export function normalizeContact(raw, companyId) {
   };
 }
 
+export async function findExistingContact(db, companyId, firstName, lastName) {
+  if (!db || !companyId || (!firstName && !lastName)) return null;
+  const fn = firstName ? firstName.trim().toLowerCase() : '';
+  const ln = lastName ? lastName.trim().toLowerCase() : '';
+
+  if (fn && ln) {
+    const row = await db.prepare(`
+      SELECT contact_id FROM contacts
+      WHERE company_id = ? AND LOWER(TRIM(first_name)) = ? AND LOWER(TRIM(last_name)) = ?
+      LIMIT 1
+    `).bind(companyId, fn, ln).first();
+    if (row?.contact_id) return row.contact_id;
+  } else if (fn) {
+    const row = await db.prepare(`
+      SELECT contact_id FROM contacts
+      WHERE company_id = ? AND LOWER(TRIM(first_name)) = ? AND (last_name IS NULL OR TRIM(last_name) = '')
+      LIMIT 1
+    `).bind(companyId, fn).first();
+    if (row?.contact_id) return row.contact_id;
+  } else if (ln) {
+    const row = await db.prepare(`
+      SELECT contact_id FROM contacts
+      WHERE company_id = ? AND (first_name IS NULL OR TRIM(first_name) = '') AND LOWER(TRIM(last_name)) = ?
+      LIMIT 1
+    `).bind(companyId, ln).first();
+    if (row?.contact_id) return row.contact_id;
+  }
+  return null;
+}
+
 export async function upsertContact(db, contact) {
+  // Composite key deduplication: if this contact already exists under the company,
+  // reuse its contact_id so the write updates rather than duplicates.
+  if (contact.company_id && (contact.first_name || contact.last_name)) {
+    const existingId = await findExistingContact(db, contact.company_id, contact.first_name, contact.last_name);
+    if (existingId) {
+      contact.contact_id = existingId;
+    }
+  }
+
   await db.prepare(`
     INSERT INTO contacts (
       contact_id, company_id, first_name, last_name, job_title,

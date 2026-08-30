@@ -19,6 +19,49 @@ const routing = new Hono();
 const MAPBOX_OPTIMIZED_TRIPS = 'https://api.mapbox.com/optimized-trips/v1/mapbox/driving';
 const EARTH_RADIUS_MI = 3958.8;
 
+/**
+ * Expected Premium Value (EPV) industry risk multipliers for B2B prospecting.
+ * High-margin voluntary benefit risk verticals receive 1.5x - 2.0x multipliers.
+ */
+export const INDUSTRY_MULTIPLIERS = {
+  'Construction & Trades': 2.0,
+  'Manufacturing': 1.8,
+  'Transportation & Logistics': 1.7,
+  'Healthcare & Medical': 1.6,
+  'Automotive & Dealerships': 1.5,
+  'Agriculture & Forestry': 1.5,
+  'Mining & Extraction': 1.5,
+  'Hospitality & Food Service': 1.3,
+  'Wholesale & Distribution': 1.3,
+  'Utilities & Communications': 1.3,
+  'Real Estate': 1.1,
+  'Retail Trade': 1.1,
+  'Personal & Consumer Services': 1.1,
+  'Entertainment & Recreation': 1.1,
+  'Education & Schools': 1.0,
+  'Professional & Tech Services': 1.0,
+  'Finance & Insurance': 1.0,
+  'Civic & Public Admin': 1.0,
+  'Other Commercial': 1.0
+};
+
+export function getIndustryMultiplier(industry) {
+  if (!industry || typeof industry !== 'string') return 1.0;
+  return INDUSTRY_MULTIPLIERS[industry.trim()] || 1.0;
+}
+
+export function calculateEpv(target, distanceMiles) {
+  const employees = (target?.employees !== null && target?.employees !== undefined && Number(target.employees) > 0)
+    ? Number(target.employees)
+    : 5;
+  const mult = getIndustryMultiplier(target?.industry);
+  const dist = (distanceMiles !== null && distanceMiles !== undefined && Number.isFinite(distanceMiles))
+    ? distanceMiles
+    : 1.0;
+  const score = (employees * mult) / (dist + 0.5);
+  return Math.round(score * 10) / 10;
+}
+
 /** Great-circle distance in miles. */
 function haversineMiles(a, b) {
   const toRad = (deg) => (deg * Math.PI) / 180;
@@ -107,7 +150,7 @@ routing.post('/optimize', async (c) => {
   if (companyIds.length > 0) {
     const placeholders = companyIds.map(() => '?').join(', ');
     const { results } = await c.env.DB.prepare(`
-      SELECT company_id, company_name, street_1, city, state, zip_code, lat, long
+      SELECT company_id, company_name, street_1, city, state, zip_code, lat, long, employees, industry
       FROM companies
       WHERE company_id IN (${placeholders}) AND lat IS NOT NULL AND long IS NOT NULL
     `).bind(...companyIds).all();
@@ -121,7 +164,9 @@ routing.post('/optimize', async (c) => {
       state: cleanCapped(s?.state, LIMITS.state),
       zip_code: cleanCapped(s?.zip_code, LIMITS.zip),
       lat: asLatitude(s?.lat),
-      long: asLongitude(s?.long ?? s?.lng)
+      long: asLongitude(s?.long ?? s?.lng),
+      employees: s?.employees ? Number(s.employees) : null,
+      industry: cleanCapped(s?.industry, LIMITS.industry)
     }));
   }
 

@@ -180,6 +180,13 @@
           <div class="panel">
             <h2>⚡ 3-Tap Log</h2>
 
+            <div class="quick-log-bar" role="group" aria-label="Quick-Log Presets">
+              <span class="quick-log-label">⚡ Express:</span>
+              <button class="quick-log-btn" type="button" data-preset="flyer_dropped" title="In-Person, Initial, Gatekeeper (Information Left)">📄 Flyer Dropped</button>
+              <button class="quick-log-btn" type="button" data-preset="gatekeeper_block" title="In-Person, Gatekeeper Blocked">🏢 Gatekeeper Block</button>
+              <button class="quick-log-btn" type="button" data-preset="dm_followup" title="In-Person, Follow-Up, DM Met">🤝 DM Follow-Up</button>
+            </div>
+
             <div class="binary-group" role="radiogroup" aria-label="Contact channel">
               <button class="binary-btn active" type="button" role="radio" aria-checked="true"
                       data-toggle="is_in_person" data-value="1"><span aria-hidden="true">🚶</span> In-Person</button>
@@ -277,11 +284,12 @@
                 <button class="btn-secondary btn-inline" id="refreshLocationBtn" type="button" title="Update GPS Location">📍 Update Location</button>
                 <button class="btn-secondary btn-inline" id="resetSkipsBtn" type="button" style="display:none;">↺ Reset Skips</button>
                 <button class="btn-secondary btn-inline" id="clusterRouteBtn" type="button" title="Select 11 closest accounts to your location">📍 Cluster 11 Closest</button>
+                <button class="btn-secondary btn-inline" id="clusterEpvBtn" type="button" title="Select highest-EPV accounts in current view">💎 Top EPV</button>
                 <button class="btn-secondary btn-inline" id="refreshTargetsBtn" type="button">Refresh</button>
               </div>
             </div>
             <p class="field-hint">
-              Select up to 12 stops or click <strong>Cluster 11 Closest</strong> to automatically queue nearby accounts starting from your current position.
+              Select up to 24 stops (split into Morning &amp; Afternoon 12-stop legs) or click <strong>Cluster 11 Closest</strong> / <strong>Top EPV</strong> to optimize by distance and Expected Premium Value.
             </p>
 
             <div class="route-layout">
@@ -297,12 +305,13 @@
                         <th scope="col">Company</th>
                         <th scope="col">Address</th>
                         <th scope="col" id="sortDistance" style="cursor: pointer;" title="Sort by Distance">Dist. 📍</th>
+                        <th scope="col" id="sortEpv" style="cursor: pointer;" title="Sort by Expected Premium Value">EPV 💎</th>
                         <th scope="col" id="sortEmployees" style="cursor: pointer;" title="Sort by Employees">Emp. 👥</th>
                         <th scope="col" class="col-skip" title="Skip account">Skip</th>
                       </tr>
                     </thead>
                     <tbody id="targetsBody">
-                      <tr><td colspan="6" class="empty-cell">Loading targets…</td></tr>
+                      <tr><td colspan="7" class="empty-cell">Loading targets…</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -312,6 +321,10 @@
               </div>
 
               <div class="route-result">
+                <div class="route-leg-bar" id="routeLegBar" style="display:none;" role="tablist" aria-label="Route Legs">
+                  <button class="route-leg-btn active" type="button" id="legMorningBtn" data-leg="1">🌅 Morning Leg (1–12)</button>
+                  <button class="route-leg-btn" type="button" id="legAfternoonBtn" data-leg="2">🌇 Afternoon Leg (13–24)</button>
+                </div>
                 <div id="routeMap" role="region" aria-label="Map of the optimized route"></div>
                 <div class="route-summary" id="routeSummary" aria-live="polite">
                   <p class="muted-note">Select targets and generate a route.</p>
