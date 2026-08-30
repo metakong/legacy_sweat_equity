@@ -137,7 +137,7 @@ function remove(logId) {
   });
 }
 
-function count() {
+export function count() {
   return new Promise((resolve) => {
     if (!db) return resolve(0);
     const request = db.transaction([STORE], 'readonly').objectStore(STORE).count();
@@ -145,6 +145,8 @@ function count() {
     request.onerror = () => resolve(0);
   });
 }
+
+export const getQueueCount = () => count();
 
 // ---------------------------------------------------------------------
 // STATUS DISPLAY

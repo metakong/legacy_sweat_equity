@@ -767,6 +767,118 @@ input[type="checkbox"] {
 
 .route-step-addr { font-size: 0.74rem; color: var(--text-muted); }
 
+/* ── Unified Data Management & Telemetry ────────── */
+.telemetry-panel {
+  margin-bottom: 0.5rem;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.telemetry-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 0.85rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--card-border);
+  gap: 0.25rem;
+}
+
+.telemetry-val {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.telemetry-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.sync-health-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 99px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.badge-live {
+  background: rgba(0, 200, 83, 0.12);
+  border: 1px solid rgba(0, 200, 83, 0.35);
+  color: var(--success);
+  box-shadow: 0 0 10px rgba(0, 200, 83, 0.2);
+}
+
+.badge-pending {
+  background: rgba(245, 166, 35, 0.12);
+  border: 1px solid rgba(245, 166, 35, 0.35);
+  color: var(--accent-gold);
+  box-shadow: 0 0 10px rgba(245, 166, 35, 0.2);
+}
+
+.badge-error {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: var(--error);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);
+}
+
+.data-mgmt-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.data-mgmt-panels .subpanel {
+  background: var(--bg-card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+}
+
+.import-section-divider {
+  border-top: 1px solid var(--card-border);
+  margin: 1.5rem 0;
+}
+
+.import-panel-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.import-panel-inner h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 /* ── Tier 2/3 cards ───────────────────────────────── */
 .tier-grid {
   display: grid;

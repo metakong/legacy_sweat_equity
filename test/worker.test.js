@@ -32,6 +32,7 @@ import {
 
 import { normalizeCompany, normalizeActivityLog, normalizeContact, calculateRenewalDate, ValidationError } from '../src/lib/db.js';
 import { computeMetrics, fallbackReport } from '../src/routes/eod.js';
+import { computeTelemetry } from '../src/index.js';
 
 // Built from char codes so the literals below never contain a raw control byte.
 const NUL = String.fromCharCode(0);
@@ -708,6 +709,110 @@ test('findExistingContact and upsertContact deduplicate contacts on company_id a
   assert.equal(id2, 'contact-uuid-1', 'Should reuse existing contact_id rather than duplicating');
   assert.equal(storedContacts.size, 1, 'Total contact count should remain 1');
 });
+
+// ---------------------------------------------------------------------
+// computeTelemetry — Data Management & Telemetry Aggregates
+// ---------------------------------------------------------------------
+test('computeTelemetry aggregates database metrics and derives sync health accurately', async () => {
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind() {
+          return {
+            async first() {
+              if (sql.includes('FROM activity_logs')) {
+                return {
+                  total_activities: 48,
+                  today_activities: 14,
+                  pending_d365_sync: 6,
+                  tier1_copied: 5,
+                  tier2_exported: 2,
+                  tier3_exported: 1
+                };
+              }
+              return null;
+            }
+          };
+        },
+        async first() {
+          if (sql.includes('FROM companies')) {
+            return { total_companies: 201, d365_synced_companies: 180 };
+          }
+          if (sql.includes('FROM contacts')) {
+            return { total_contacts: 154 };
+          }
+          return null;
+        }
+      };
+    }
+  };
+
+  const env = {
+    GROQ_API_KEY: 'g-key',
+    OPENROUTER_API_KEY: 'or-key',
+    TAVILY_API_KEY: 't-key'
+  };
+
+  const telemetry = await computeTelemetry(mockDb, env, '2026-08-30');
+  assert.equal(telemetry.status, 'ok');
+  assert.equal(telemetry.business_date, '2026-08-30');
+  assert.equal(telemetry.sync_health, 'live');
+  assert.equal(telemetry.metrics.total_companies, 201);
+  assert.equal(telemetry.metrics.d365_synced_companies, 180);
+  assert.equal(telemetry.metrics.total_contacts, 154);
+  assert.equal(telemetry.metrics.total_activities, 48);
+  assert.equal(telemetry.metrics.today_activities, 14);
+  assert.equal(telemetry.metrics.pending_d365_sync, 6);
+  assert.equal(telemetry.metrics.tier1_copied_count, 5);
+  assert.equal(telemetry.metrics.tier2_exported_count, 2);
+  assert.equal(telemetry.metrics.tier3_exported_count, 1);
+  assert.equal(telemetry.providers.groq, true);
+  assert.equal(telemetry.providers.openrouter, true);
+  assert.equal(telemetry.providers.tavily, true);
+  assert.equal(telemetry.providers.mapbox, false);
+});
+
+test('computeTelemetry sets sync_health to pending when backlog exceeds threshold', async () => {
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind() {
+          return {
+            async first() {
+              return {
+                total_activities: 100,
+                today_activities: 30,
+                pending_d365_sync: 25,
+                tier1_copied: 0,
+                tier2_exported: 0,
+                tier3_exported: 0
+              };
+            }
+          };
+        },
+        async first() {
+          if (sql.includes('FROM companies')) return { total_companies: 50, d365_synced_companies: 20 };
+          if (sql.includes('FROM contacts')) return { total_contacts: 40 };
+          return null;
+        }
+      };
+    }
+  };
+
+  const telemetry = await computeTelemetry(mockDb, {}, '2026-08-30');
+  assert.equal(telemetry.sync_health, 'pending');
+  assert.equal(telemetry.metrics.pending_d365_sync, 25);
+});
+
+test('computeTelemetry handles null DB and empty environment gracefully', async () => {
+  const telemetry = await computeTelemetry(null, null, '2026-08-30');
+  assert.equal(telemetry.status, 'ok');
+  assert.equal(telemetry.sync_health, 'live');
+  assert.equal(telemetry.metrics.total_companies, 0);
+  assert.equal(telemetry.metrics.total_activities, 0);
+  assert.equal(telemetry.providers.groq, false);
+});
+
 
 
 

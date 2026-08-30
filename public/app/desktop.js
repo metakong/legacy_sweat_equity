@@ -23,7 +23,7 @@ import {
   parseNotes
 } from './d365.js';
 import { renderMarkdown } from './markdown.js';
-import { cacheDossier } from './store.js';
+import { cacheDossier, getQueueCount } from './store.js';
 
 const MAX_ROUTE_STOPS = 24;
 const MAX_LEG_STOPS = 12;
@@ -83,6 +83,7 @@ const desktopState = {
   selectedTargets: new Set(),
   tier1Rows: [],
   exportRows: { tier2: [], tier3: [] },
+  telemetry: null,
   eodMarkdown: '',
   routeMap: null,
   routeLayer: null,
@@ -821,6 +822,7 @@ async function markSynced(logIds, status) {
       if (logIds.includes(row.log_id)) row.sync_tier_status = status;
     });
     renderTier1();
+    loadTelemetry().catch(() => {});
   } catch (err) {
     console.error('Could not update sync tier:', err);
     showToast(`Copied, but the tier status did not update: ${err.message}`, 'info');
@@ -971,10 +973,81 @@ async function markExported(rows, status) {
   try {
     await apiPost('/api/activity/mark-synced', { log_ids: logIds, sync_tier_status: status });
     await loadExports();
+    loadTelemetry().catch(() => {});
   } catch (err) {
     console.error('Could not update sync tier:', err);
     showToast(`File downloaded, but tier status did not update: ${err.message}`, 'info');
   }
+}
+
+// =====================================================================
+// UNIFIED DATA MANAGEMENT & TELEMETRY
+// =====================================================================
+
+export async function loadTelemetry() {
+  try {
+    const queueCount = await getQueueCount();
+    const queueEl = $('telemetryQueue');
+    if (queueEl) queueEl.textContent = String(queueCount);
+
+    const data = await apiFetch('/api/telemetry');
+    desktopState.telemetry = data;
+    renderTelemetry(data, queueCount);
+  } catch (err) {
+    console.warn('Could not load telemetry:', err.message);
+    const badge = $('telemetryHealthBadge');
+    const badgeText = $('telemetryHealthText');
+    if (badge && badgeText) {
+      badge.className = 'sync-health-badge badge-error';
+      badgeText.textContent = '🔴 Telemetry Degraded';
+    }
+  }
+}
+
+export function renderTelemetry(data, queueCount = 0) {
+  if (!data) return;
+  const metrics = data.metrics || {};
+
+  const companiesEl = $('telemetryCompanies');
+  if (companiesEl) companiesEl.textContent = Number(metrics.total_companies || 0).toLocaleString();
+
+  const todayTouchesEl = $('telemetryTodayTouches');
+  if (todayTouchesEl) todayTouchesEl.textContent = Number(metrics.today_activities || 0).toLocaleString();
+
+  const pendingSyncEl = $('telemetryPendingSync');
+  if (pendingSyncEl) pendingSyncEl.textContent = Number(metrics.pending_d365_sync || 0).toLocaleString();
+
+  const queueEl = $('telemetryQueue');
+  if (queueEl) queueEl.textContent = String(queueCount);
+
+  const badge = $('telemetryHealthBadge');
+  const badgeText = $('telemetryHealthText');
+  if (badge && badgeText) {
+    const pending = Number(metrics.pending_d365_sync || 0) + Number(queueCount);
+    if (!navigator.onLine) {
+      badge.className = 'sync-health-badge badge-pending';
+      badgeText.textContent = '🟡 Offline Queue Active';
+    } else if (pending > 20) {
+      badge.className = 'sync-health-badge badge-pending';
+      badgeText.textContent = `🟡 ${pending} Pending`;
+    } else {
+      badge.className = 'sync-health-badge badge-live';
+      badgeText.textContent = '🟢 Live';
+    }
+  }
+}
+
+export async function loadDataManagement() {
+  await Promise.allSettled([
+    loadTier1(),
+    loadExports(),
+    loadTelemetry()
+  ]);
+}
+
+export function initDataManagementView() {
+  initTier1Tab();
+  initTier23Tab();
 }
 
 // =====================================================================
@@ -1349,13 +1422,13 @@ function initEodTab() {
 
 export function initDesktopViews() {
   initRouteTab();
-  initTier1Tab();
-  initTier23Tab();
+  initDataManagementView();
   initEodTab();
 
   // Each tab fetches on first open, not on page load — the field log must be
   // interactive immediately, even on a slow tethered connection.
   onViewOpen('route', () => { initRouteMap(); loadTargets(); });
+  onViewOpen('data-management', loadDataManagement);
   onViewOpen('tier1', loadTier1);
   onViewOpen('tier23', loadExports);
   // The debrief is a paid model call, so it runs on request rather than on
@@ -1366,6 +1439,7 @@ export function initDesktopViews() {
 export function refreshActiveDesktopView() {
   const active = document.querySelector('.view.active');
   if (!active) return;
+  if (active.id === 'view-data-management') loadDataManagement();
   if (active.id === 'view-tier1') loadTier1();
   if (active.id === 'view-tier23') loadExports();
   if (active.id === 'view-route') loadTargets();
@@ -1373,4 +1447,10 @@ export function refreshActiveDesktopView() {
 
 // Referenced by the Tier 2 column definition; re-exported so a future tab can
 // render the same key columns without importing d365.js directly.
-export { D365_OPEN_LEADS_COLUMNS, D365_TIER2_KEY_COLUMNS, parseNotes };
+export {
+  D365_OPEN_LEADS_COLUMNS,
+  D365_TIER2_KEY_COLUMNS,
+  parseNotes,
+  loadTier1,
+  loadExports
+};

@@ -145,6 +145,11 @@ app.post('/api/admin/reclassify-industries', async (c) => {
   });
 });
 
+app.get('/api/telemetry', async (c) => {
+  const telemetry = await computeTelemetry(c.env.DB, c.env);
+  return c.json(telemetry, 200, { 'Cache-Control': 'no-store' });
+});
+
 app.get('/api/health', (c) => c.json({
   status: 'ok',
   business_date: businessDate(),
@@ -190,6 +195,85 @@ app.onError((err, c) => {
   console.error('Worker error:', err);
   return c.json({ error: 'Internal server error' }, 500);
 });
+
+/**
+ * Compute aggregate telemetry for the Data Management dashboard.
+ */
+export async function computeTelemetry(db, env = {}, targetDate = businessDate()) {
+  const { start, end } = businessDayRangeUtc(targetDate);
+
+  let totalCompanies = 0;
+  let d365SyncedCompanies = 0;
+  let totalContacts = 0;
+  let totalActivities = 0;
+  let todayActivities = 0;
+  let pendingD365Sync = 0;
+  let tier1Copied = 0;
+  let tier2Exported = 0;
+  let tier3Exported = 0;
+
+  if (db) {
+    try {
+      const coRes = await db.prepare(`
+        SELECT
+          COUNT(*) AS total_companies,
+          SUM(CASE WHEN is_d365_synced = 1 THEN 1 ELSE 0 END) AS d365_synced_companies
+        FROM companies
+      `).first();
+      totalCompanies = Number(coRes?.total_companies || 0);
+      d365SyncedCompanies = Number(coRes?.d365_synced_companies || 0);
+    } catch (_) {}
+
+    try {
+      const ctRes = await db.prepare(`SELECT COUNT(*) AS total_contacts FROM contacts`).first();
+      totalContacts = Number(ctRes?.total_contacts || 0);
+    } catch (_) {}
+
+    try {
+      const actRes = await db.prepare(`
+        SELECT
+          COUNT(*) AS total_activities,
+          SUM(CASE WHEN timestamp >= ? AND timestamp < ? THEN 1 ELSE 0 END) AS today_activities,
+          SUM(CASE WHEN sync_tier_status = 'PENDING' THEN 1 ELSE 0 END) AS pending_d365_sync,
+          SUM(CASE WHEN sync_tier_status = 'TIER1_COPIED' THEN 1 ELSE 0 END) AS tier1_copied,
+          SUM(CASE WHEN sync_tier_status = 'TIER2_EXPORTED' THEN 1 ELSE 0 END) AS tier2_exported,
+          SUM(CASE WHEN sync_tier_status = 'TIER3_EXPORTED' THEN 1 ELSE 0 END) AS tier3_exported
+        FROM activity_logs
+      `).bind(start, end).first();
+      totalActivities = Number(actRes?.total_activities || 0);
+      todayActivities = Number(actRes?.today_activities || 0);
+      pendingD365Sync = Number(actRes?.pending_d365_sync || 0);
+      tier1Copied = Number(actRes?.tier1_copied || 0);
+      tier2Exported = Number(actRes?.tier2_exported || 0);
+      tier3Exported = Number(actRes?.tier3_exported || 0);
+    } catch (_) {}
+  }
+
+  const syncHealth = pendingD365Sync > 20 ? 'pending' : 'live';
+
+  return {
+    status: 'ok',
+    business_date: targetDate,
+    sync_health: syncHealth,
+    metrics: {
+      total_companies: totalCompanies,
+      d365_synced_companies: d365SyncedCompanies,
+      total_contacts: totalContacts,
+      total_activities: totalActivities,
+      today_activities: todayActivities,
+      pending_d365_sync: pendingD365Sync,
+      tier1_copied_count: tier1Copied,
+      tier2_exported_count: tier2Exported,
+      tier3_exported_count: tier3Exported
+    },
+    providers: {
+      groq: Boolean(env?.GROQ_API_KEY),
+      openrouter: Boolean(env?.OPENROUTER_API_KEY),
+      tavily: Boolean(env?.TAVILY_API_KEY),
+      mapbox: Boolean(env?.MAPBOX_TOKEN)
+    }
+  };
+}
 
 // ---------------------------------------------------------------------
 // NIGHTLY ROLLUP (cron: 0 2 * * *)
@@ -237,3 +321,4 @@ export default {
 export { SECURITY_HEADERS, CONTENT_SECURITY_POLICY } from './lib/security.js';
 export { businessDate, businessDayRangeUtc, toSqlTimestamp, toLocalStamp } from './lib/time.js';
 export { cleanText, deriveDisposition, matchEnum, parseJsonLoose, RATINGS, DISPOSITIONS } from './lib/validate.js';
+

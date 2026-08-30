@@ -54,15 +54,9 @@
           </button>
         </li>
         <li>
-          <button class="nav-item" type="button" role="tab" id="tab-tier1"
-                  data-view="tier1" aria-selected="false" aria-controls="view-tier1">
-            <span class="nav-icon" aria-hidden="true">📋</span> Tier 1 Handoff
-          </button>
-        </li>
-        <li>
-          <button class="nav-item" type="button" role="tab" id="tab-tier23"
-                  data-view="tier23" aria-selected="false" aria-controls="view-tier23">
-            <span class="nav-icon" aria-hidden="true">📤</span> Tier 2/3 Sync
+          <button class="nav-item" type="button" role="tab" id="tab-data-management"
+                  data-view="data-management" aria-selected="false" aria-controls="view-data-management">
+            <span class="nav-icon" aria-hidden="true">🗄️</span> Data Management
           </button>
         </li>
         <li>
@@ -339,127 +333,158 @@
       </section>
 
       <!-- ==========================================================
-           VIEW 3 — TIER 1 CRM HANDOFF (desktop)
+           VIEW 3 — UNIFIED DATA MANAGEMENT & TELEMETRY
            ========================================================== -->
-      <section class="view" id="view-tier1" role="tabpanel" aria-labelledby="tab-tier1" hidden>
+      <section class="view app-view" id="view-data-management" role="tabpanel" aria-labelledby="tab-data-management" hidden>
         <main class="wide">
-          <div class="panel">
+          <!-- Real-Time Edge Sync Status & Database Telemetry Header -->
+          <div class="panel telemetry-panel">
             <div class="panel-head">
-              <h2>📋 Tier 1 — Clipboard Handoff</h2>
-              <div class="panel-actions">
-                <label class="inline-label" for="tier1Date">Business day</label>
-                <input type="date" id="tier1Date">
-                <button class="btn-secondary btn-inline" id="tier1RefreshBtn" type="button">Refresh</button>
-                <button class="btn-primary btn-inline" id="copyAllBtn" type="button">Copy All for D365</button>
+              <h2>🗄️ Data Management &amp; Edge Telemetry</h2>
+              <div class="sync-health-badge badge-live" id="telemetryHealthBadge" aria-live="polite">
+                <span class="badge-dot"></span> <span id="telemetryHealthText">🟢 Live</span>
               </div>
             </div>
             <p class="field-hint">
-              Copies tab-delimited rows matching the Aflac Dynamics 365 <strong>Open Leads</strong> column
-              order. Paste directly into the grid. Column order is defined in
-              <code>public/app/d365.js</code> — reconcile it with your actual view once.
+              Unified operational console for Dynamics 365 clipboard handoffs, batch file exports, lead ingestion, and live database telemetry.
             </p>
 
-            <div class="table-scroll">
-              <table class="data-table" id="tier1Table">
-                <caption class="visually-hidden">Today's logged activities</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Time</th>
-                    <th scope="col">Company</th>
-                    <th scope="col">Contact</th>
-                    <th scope="col">Channel</th>
-                    <th scope="col">Disposition</th>
-                    <th scope="col">Rating</th>
-                    <th scope="col">Est. AP</th>
-                    <th scope="col">Status</th>
-                    <th scope="col">Copy</th>
-                  </tr>
-                </thead>
-                <tbody id="tier1Body">
-                  <tr><td colspan="9" class="empty-cell">Loading activity…</td></tr>
-                </tbody>
-              </table>
+            <div class="telemetry-grid">
+              <div class="telemetry-card">
+                <span class="telemetry-val" id="telemetryCompanies">0</span>
+                <span class="telemetry-label">Accounts in DB</span>
+              </div>
+              <div class="telemetry-card">
+                <span class="telemetry-val" id="telemetryTodayTouches">0</span>
+                <span class="telemetry-label">Today's Touches</span>
+              </div>
+              <div class="telemetry-card">
+                <span class="telemetry-val" id="telemetryPendingSync">0</span>
+                <span class="telemetry-label">Pending D365</span>
+              </div>
+              <div class="telemetry-card">
+                <span class="telemetry-val" id="telemetryQueue">0</span>
+                <span class="telemetry-label">Local Offline Queue</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="data-mgmt-panels">
+            <!-- PANEL A: Tier 1 Handoff (Manual Export/Import & CSV/D365 Handshakes) -->
+            <div class="panel subpanel" id="panel-tier1">
+              <div class="panel-head">
+                <h2>📋 Panel A: Tier 1 — Clipboard Handoff</h2>
+                <div class="panel-actions">
+                  <label class="inline-label" for="tier1Date">Business day</label>
+                  <input type="date" id="tier1Date">
+                  <button class="btn-secondary btn-inline" id="tier1RefreshBtn" type="button">Refresh</button>
+                  <button class="btn-primary btn-inline" id="copyAllBtn" type="button">Copy All for D365</button>
+                </div>
+              </div>
+              <p class="field-hint">
+                Copies tab-delimited rows matching the Aflac Dynamics 365 <strong>Open Leads</strong> column
+                order. Paste directly into the grid. Column order is defined in
+                <code>public/app/d365.js</code>.
+              </p>
+
+              <div class="table-scroll">
+                <table class="data-table" id="tier1Table">
+                  <caption class="visually-hidden">Today's logged activities</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Time</th>
+                      <th scope="col">Company</th>
+                      <th scope="col">Contact</th>
+                      <th scope="col">Channel</th>
+                      <th scope="col">Disposition</th>
+                      <th scope="col">Rating</th>
+                      <th scope="col">Est. AP</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Copy</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tier1Body">
+                    <tr><td colspan="9" class="empty-cell">Loading activity…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- PANEL B: Tier 2/3 Sync & Audit Logs (Real-time Edge Sync Status & Database Telemetry) -->
+            <div class="panel subpanel" id="panel-tier23">
+              <div class="panel-head">
+                <h2>📤 Panel B: Tier 2/3 Sync &amp; Audit Logs</h2>
+                <div class="panel-actions">
+                  <label class="inline-label" for="exportScope">Scope</label>
+                  <select id="exportScope">
+                    <option value="today">Today only</option>
+                    <option value="all">All pending</option>
+                  </select>
+                  <button class="btn-secondary btn-inline" id="exportRefreshBtn" type="button">Refresh</button>
+                </div>
+              </div>
+
+              <div class="tier-grid">
+                <div class="tier-card">
+                  <h3>Tier 2 — Existing D365 Leads</h3>
+                  <p class="field-hint">
+                    Generates <strong>.xlsx</strong> preserving the
+                    <code>(Do Not Modify)</code> Lead, Row Checksum and Modified On columns
+                    exactly as Dynamics exported them.
+                  </p>
+                  <p class="tier-count" id="tier2Count">0 accounts</p>
+                  <ul class="tier-preview" id="tier2Preview"></ul>
+                  <button class="btn-primary" id="exportXlsxBtn" type="button" disabled>
+                    <span class="btn-text">Download .xlsx</span>
+                  </button>
+                </div>
+
+                <div class="tier-card">
+                  <h3>Tier 3 — Net-New Scouted Leads</h3>
+                  <p class="field-hint">
+                    Generates a clean <strong>.csv</strong> for the D365 Import Data wizard.
+                    No checksum columns — these rows have no Dynamics identity yet.
+                  </p>
+                  <p class="tier-count" id="tier3Count">0 accounts</p>
+                  <ul class="tier-preview" id="tier3Preview"></ul>
+                  <button class="btn-primary" id="exportCsvBtn" type="button" disabled>
+                    <span class="btn-text">Download .csv</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="import-section-divider"></div>
+
+              <div class="import-panel-inner">
+                <h3>📥 Import D365 Leads</h3>
+                <p class="field-hint">
+                  Upload a D365 <strong>Open Leads</strong> export (<code>.xlsx</code> or <code>.csv</code>).
+                  Rows are deduplicated by <strong>Business Name</strong> before ingestion — contacts
+                  from duplicate rows are merged under one company record. Addresses are geocoded
+                  automatically when a Mapbox token is available.
+                </p>
+                <div class="import-controls">
+                  <input type="file" id="importFileInput" accept=".csv,.xlsx"
+                         aria-label="Select a D365 export file">
+                  <button class="btn-primary" id="uploadLeadsBtn" type="button" disabled>
+                    <span class="btn-text">Upload &amp; Deduplicate</span>
+                  </button>
+                </div>
+                <div class="import-progress" id="importProgress" hidden>
+                  <div class="import-progress-bar">
+                    <div class="import-progress-fill" id="importProgressFill"></div>
+                  </div>
+                  <p class="import-status" id="importStatus">Preparing…</p>
+                </div>
+                <div class="import-stats" id="importStats" hidden aria-live="polite"></div>
+              </div>
             </div>
           </div>
         </main>
       </section>
 
       <!-- ==========================================================
-           VIEW 4 — TIER 2/3 SYNC (desktop)
-           ========================================================== -->
-      <section class="view" id="view-tier23" role="tabpanel" aria-labelledby="tab-tier23" hidden>
-        <main class="wide">
-          <div class="panel">
-            <div class="panel-head">
-              <h2>📤 Tier 2 / Tier 3 — File Sync</h2>
-              <div class="panel-actions">
-                <label class="inline-label" for="exportScope">Scope</label>
-                <select id="exportScope">
-                  <option value="today">Today only</option>
-                  <option value="all">All pending</option>
-                </select>
-                <button class="btn-secondary btn-inline" id="exportRefreshBtn" type="button">Refresh</button>
-              </div>
-            </div>
-
-            <div class="tier-grid">
-              <div class="tier-card">
-                <h3>Tier 2 — Existing D365 Leads</h3>
-                <p class="field-hint">
-                  Generates <strong>.xlsx</strong> preserving the
-                  <code>(Do Not Modify)</code> Lead, Row Checksum and Modified On columns
-                  exactly as Dynamics exported them. Without these, re-import fails validation.
-                </p>
-                <p class="tier-count" id="tier2Count">0 accounts</p>
-                <ul class="tier-preview" id="tier2Preview"></ul>
-                <button class="btn-primary" id="exportXlsxBtn" type="button" disabled>
-                  <span class="btn-text">Download .xlsx</span>
-                </button>
-              </div>
-
-              <div class="tier-card">
-                <h3>Tier 3 — Net-New Scouted Leads</h3>
-                <p class="field-hint">
-                  Generates a clean <strong>.csv</strong> for the D365 Import Data wizard.
-                  No checksum columns — these rows have no Dynamics identity yet.
-                </p>
-                <p class="tier-count" id="tier3Count">0 accounts</p>
-                <ul class="tier-preview" id="tier3Preview"></ul>
-                <button class="btn-primary" id="exportCsvBtn" type="button" disabled>
-                  <span class="btn-text">Download .csv</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="panel import-panel">
-            <h2>📥 Import D365 Leads</h2>
-            <p class="field-hint">
-              Upload a D365 <strong>Open Leads</strong> export (<code>.xlsx</code> or <code>.csv</code>).
-              Rows are deduplicated by <strong>Business Name</strong> before ingestion — contacts
-              from duplicate rows are merged under one company record. Addresses are geocoded
-              automatically when a Mapbox token is available.
-            </p>
-            <div class="import-controls">
-              <input type="file" id="importFileInput" accept=".csv,.xlsx"
-                     aria-label="Select a D365 export file">
-              <button class="btn-primary" id="uploadLeadsBtn" type="button" disabled>
-                <span class="btn-text">Upload &amp; Deduplicate</span>
-              </button>
-            </div>
-            <div class="import-progress" id="importProgress" hidden>
-              <div class="import-progress-bar">
-                <div class="import-progress-fill" id="importProgressFill"></div>
-              </div>
-              <p class="import-status" id="importStatus">Preparing…</p>
-            </div>
-            <div class="import-stats" id="importStats" hidden aria-live="polite"></div>
-          </div>
-        </main>
-      </section>
-
-      <!-- ==========================================================
-           VIEW 5 — EOD AI DEBRIEF (desktop)
+           VIEW 4 — EOD AI DEBRIEF (desktop)
            ========================================================== -->
       <section class="view" id="view-eod" role="tabpanel" aria-labelledby="tab-eod" hidden>
         <main class="wide">
@@ -499,11 +524,8 @@
       <button class="nav-item" type="button" role="tab" data-view="route" aria-selected="false" aria-controls="view-route">
         <span class="nav-icon" aria-hidden="true">🗺️</span><span class="nav-label">Route</span>
       </button>
-      <button class="nav-item" type="button" role="tab" data-view="tier1" aria-selected="false" aria-controls="view-tier1">
-        <span class="nav-icon" aria-hidden="true">📋</span><span class="nav-label">Tier 1</span>
-      </button>
-      <button class="nav-item" type="button" role="tab" data-view="tier23" aria-selected="false" aria-controls="view-tier23">
-        <span class="nav-icon" aria-hidden="true">📤</span><span class="nav-label">Sync</span>
+      <button class="nav-item" type="button" role="tab" data-view="data-management" aria-selected="false" aria-controls="view-data-management">
+        <span class="nav-icon" aria-hidden="true">🗄️</span><span class="nav-label">Data</span>
       </button>
       <button class="nav-item" type="button" role="tab" data-view="eod" aria-selected="false" aria-controls="view-eod">
         <span class="nav-icon" aria-hidden="true">🌙</span><span class="nav-label">EOD</span>
