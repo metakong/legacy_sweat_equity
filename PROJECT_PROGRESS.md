@@ -8,6 +8,23 @@
 
 ---
 
+## 2026-08-30 11:25 CDT — Live Remote D1 Database Deduplication (Agent: Antigravity)
+
+### Session Goal
+Perform a live remediation and deduplication of the remote Cloudflare D1 production database (`legacy-db`) to clean up duplicate company records resulting from the initial seed.
+
+### Execution Summary
+- **Data Extraction**: Exported live database snapshot of all 1,127 company records via Wrangler D1.
+- **Mapping & FK Repointing**: Analyzed and grouped companies by canonical `Business Name` (`toUpperCase().trim()`). Identified 201 unique company entities and 926 duplicate company records across 166 company groups.
+- **Remediation Script**: Generated and executed 2,778 SQL statements against the remote database (`847928be-c56f-4de4-bff4-083e08db9140`):
+  - Repointed all existing `contacts` foreign keys from duplicate company IDs to primary company IDs.
+  - Repointed all existing `activity_logs` foreign keys from duplicate company IDs to primary company IDs.
+  - Deleted 926 duplicate company records.
+- **Verification**: Verified remote production database company count reduced from 1,127 to 201 unique companies with all contacts and activity logs intact.
+- **Cleanup**: Purged all temporary export and SQL generation files.
+
+---
+
 ## 2026-08-30 11:15 CDT — D365 Deduplication Importer & Mapbox Route Planner Audit (Agent: Antigravity)
 
 ### Session Goal
