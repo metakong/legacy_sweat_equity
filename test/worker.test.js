@@ -288,8 +288,8 @@ test('normalizeCompany requires a name and defaults the CRM option sets', () => 
 
   const company = normalizeCompany({ company_name: 'Ozark Dental Group' });
   assert.equal(company.company_name, 'Ozark Dental Group');
-  assert.equal(company.lead_source, undefined);
-  assert.equal(company.rating, undefined);
+  assert.equal(company.lead_source, null);
+  assert.equal(company.rating, null);
   assert.equal(company.is_d365_synced, 0);
   assert.ok(company.company_id.length > 0);
 });
@@ -314,14 +314,14 @@ test('normalizeCompany binds only primitives', () => {
   });
   for (const [key, value] of Object.entries(company)) {
     assert.ok(
-      value === null || value === undefined || typeof value === 'string' || typeof value === 'number',
+      value === null || typeof value === 'string' || typeof value === 'number',
       `${key} is a ${typeof value} — D1 would throw on bind`
     );
   }
   assert.equal(company.lat, null);
   assert.equal(company.long, null);
   assert.equal(company.employees, null);
-  assert.equal(company.rating, undefined, 'an invalid rating remains undefined rather than persisting');
+  assert.equal(company.rating, null, 'an invalid rating remains null rather than persisting');
 });
 
 test('normalizeActivityLog fills a NOT NULL disposition from the binary toggles', () => {
@@ -1093,6 +1093,83 @@ test('POST /api/pipeline/stage and /api/pipeline/snooze process valid JSON mutat
   assert.equal(snoozeData.success, true);
   assert.equal(snoozeData.snoozed_until, '2026-09-30');
 });
+
+test('POST /api/transcribe-and-log processes FormData with missing CRM optionals and manual_disposition without malformed company error', async () => {
+  const insertedCompanies = [];
+  const insertedLogs = [];
+
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          return {
+            async first() {
+              if (sql.includes('SELECT 1 AS ok FROM companies')) {
+                return { ok: 1 };
+              }
+              if (sql.includes('SELECT pipeline_stage FROM companies')) {
+                return { pipeline_stage: 'PROSPECT' };
+              }
+              return null;
+            },
+            async run() {
+              if (sql.includes('INSERT INTO companies')) {
+                insertedCompanies.push(args);
+              }
+              if (sql.includes('INSERT INTO activity_logs')) {
+                insertedLogs.push(args);
+              }
+              return { success: true };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const form = new FormData();
+  const audioBytes = new Uint8Array([1, 2, 3, 4]);
+  const audioBlob = new Blob([audioBytes], { type: 'audio/webm' });
+  form.append('audio', audioBlob, 'journal-test.webm');
+  form.append('is_in_person', '1');
+  form.append('is_initial', '1');
+  form.append('is_dm_contact', '0');
+  form.append('manual_disposition', 'Gatekeeper Blocked');
+  form.append('company', JSON.stringify({
+    company_name: 'Ozark Precision Machining',
+    street_1: '456 Commercial Way'
+  }));
+
+  const res = await app.request('/api/transcribe-and-log', {
+    method: 'POST',
+    headers: {
+      'x-api-key': 'LEGACY_EDGE_KEY_2026'
+    },
+    body: form
+  }, {
+    DB: mockDb,
+    STORE_AUDIO: '0'
+  });
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.success, true);
+  assert.equal(data.disposition, 'Gatekeeper Blocked');
+  assert.ok(data.company_id);
+  assert.equal(insertedCompanies.length, 1);
+  assert.equal(insertedLogs.length, 1);
+
+  // Verify company parameters bound to DB contain null rather than undefined
+  const companyBindings = insertedCompanies[0];
+  assert.equal(companyBindings[4], 'Ozark Precision Machining'); // company_name
+  assert.equal(companyBindings[5], '456 Commercial Way'); // street_1
+  assert.equal(companyBindings[12], null); // lead_source is null
+  assert.equal(companyBindings[13], null); // rating is null
+  for (const b of companyBindings) {
+    assert.notEqual(b, undefined, 'No undefined parameter should be bound to D1');
+  }
+});
+
 
 
 

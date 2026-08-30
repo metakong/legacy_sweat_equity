@@ -55,31 +55,31 @@ export function normalizeCompany(raw) {
 
   return {
     company_id: companyId,
-    d365_lead_id: cleanCapped(raw?.d365_lead_id, LIMITS.d365Id),
-    d365_checksum: cleanCapped(raw?.d365_checksum, LIMITS.checksum),
-    d365_modified_on: cleanCapped(raw?.d365_modified_on, 64),
+    d365_lead_id: cleanCapped(raw?.d365_lead_id, LIMITS.d365Id) || null,
+    d365_checksum: cleanCapped(raw?.d365_checksum, LIMITS.checksum) || null,
+    d365_modified_on: cleanCapped(raw?.d365_modified_on, 64) || null,
     company_name: companyName,
-    street_1: cleanCapped(raw?.street_1, LIMITS.street),
-    street_2: cleanCapped(raw?.street_2, LIMITS.street),
-    city: cleanCapped(raw?.city, LIMITS.city),
-    state: cleanCapped(raw?.state, LIMITS.state),
-    zip_code: cleanCapped(raw?.zip_code, LIMITS.zip),
-    lat: asLatitude(raw?.lat),
-    long: asLongitude(raw?.long ?? raw?.lng),
-    lead_source: matchEnum(raw?.lead_source, LEAD_SOURCES) || undefined,
-    rating: matchEnum(raw?.rating, RATINGS) || undefined,
-    employees: asCount(raw?.employees, 5_000_000),
-    industry: cleanCapped(raw?.industry, LIMITS.industry),
-    sic_code: cleanCapped(raw?.sic_code, 16),
-    account_number: cleanCapped(raw?.account_number, 64),
-    post_enrollment_date: asIsoDate(raw?.post_enrollment_date),
-    renewal_date: asIsoDate(raw?.renewal_date),
-    pipeline_stage: cleanCapped(raw?.pipeline_stage, 32) || null,
-    stage_entered_at: asIsoDate(raw?.stage_entered_at),
-    snoozed_until: asIsoDate(raw?.snoozed_until),
-    disqualified_reason: cleanCapped(raw?.disqualified_reason, 500),
-    forecast_ap: asMoney(raw?.forecast_ap),
-    forecast_confidence: asCount(raw?.forecast_confidence, 100),
+    street_1: cleanCapped(raw?.street_1, LIMITS.street) || null,
+    street_2: cleanCapped(raw?.street_2, LIMITS.street) || null,
+    city: cleanCapped(raw?.city, LIMITS.city) || null,
+    state: cleanCapped(raw?.state, LIMITS.state) || null,
+    zip_code: cleanCapped(raw?.zip_code, LIMITS.zip) || null,
+    lat: asLatitude(raw?.lat) ?? null,
+    long: asLongitude(raw?.long ?? raw?.lng) ?? null,
+    lead_source: matchEnum(raw?.lead_source, LEAD_SOURCES) || null,
+    rating: matchEnum(raw?.rating, RATINGS) || null,
+    employees: asCount(raw?.employees, 5_000_000) ?? null,
+    industry: cleanCapped(raw?.industry, LIMITS.industry) || null,
+    sic_code: cleanCapped(raw?.sic_code, 16) || null,
+    account_number: cleanCapped(raw?.account_number, 64) || null,
+    post_enrollment_date: asIsoDate(raw?.post_enrollment_date) || null,
+    renewal_date: asIsoDate(raw?.renewal_date) || null,
+    pipeline_stage: matchEnum(raw?.pipeline_stage, PIPELINE_STAGES) || null,
+    stage_entered_at: asIsoDate(raw?.stage_entered_at) || null,
+    snoozed_until: asIsoDate(raw?.snoozed_until) || null,
+    disqualified_reason: cleanCapped(raw?.disqualified_reason, 500) || null,
+    forecast_ap: asMoney(raw?.forecast_ap) ?? null,
+    forecast_confidence: asCount(raw?.forecast_confidence, 100) ?? null,
     // A record only counts as synced once it carries the D365 identity that
     // proves it round-tripped. Trusting a client-sent flag here is how
     // net-new leads silently drop out of the Tier 3 export.
@@ -133,32 +133,32 @@ export async function upsertCompany(db, company) {
       is_d365_synced      = MAX(excluded.is_d365_synced, companies.is_d365_synced)
   `).bind(
     company.company_id,
-    company.d365_lead_id,
-    company.d365_checksum,
-    company.d365_modified_on,
+    company.d365_lead_id ?? null,
+    company.d365_checksum ?? null,
+    company.d365_modified_on ?? null,
     company.company_name,
-    company.street_1,
-    company.street_2,
-    company.city,
-    company.state,
-    company.zip_code,
-    company.lat,
-    company.long,
-    company.lead_source,
-    company.rating,
-    company.employees,
-    company.industry,
-    company.sic_code,
-    company.account_number,
-    company.post_enrollment_date,
-    company.renewal_date,
-    company.pipeline_stage,
-    company.stage_entered_at,
-    company.snoozed_until,
-    company.disqualified_reason,
-    company.forecast_ap,
-    company.forecast_confidence,
-    company.is_d365_synced
+    company.street_1 ?? null,
+    company.street_2 ?? null,
+    company.city ?? null,
+    company.state ?? null,
+    company.zip_code ?? null,
+    company.lat ?? null,
+    company.long ?? null,
+    company.lead_source ?? null,
+    company.rating ?? null,
+    company.employees ?? null,
+    company.industry ?? null,
+    company.sic_code ?? null,
+    company.account_number ?? null,
+    company.post_enrollment_date ?? null,
+    company.renewal_date ?? null,
+    company.pipeline_stage ?? null,
+    company.stage_entered_at ?? null,
+    company.snoozed_until ?? null,
+    company.disqualified_reason ?? null,
+    company.forecast_ap ?? null,
+    company.forecast_confidence ?? null,
+    company.is_d365_synced ?? 0
   ).run();
 
   return company.company_id;
@@ -208,6 +208,7 @@ export async function setCompanyRenewalDate(db, companyId, renewalDate) {
  * Returns the target canonical stage or null if no advancement is indicated.
  */
 export function inferTargetPipelineStage(currentStage, disposition, isDmContact) {
+  if (!disposition) return null;
   const cur = currentStage || 'PROSPECT';
   const curRank = STAGE_RANKS[cur] || 1;
 
@@ -244,8 +245,9 @@ export function inferTargetPipelineStage(currentStage, disposition, isDmContact)
  * enforcing forward-only transitions (unless transitioning to a terminal state).
  */
 export async function autoAdvancePipelineStage(db, companyId, targetStage, logId = null, reason = 'Auto-inferred from field touch') {
+  if (!db || !companyId || !targetStage) return null;
   const canonicalStage = matchEnum(targetStage, PIPELINE_STAGES);
-  if (!canonicalStage || !companyId || !db) return null;
+  if (!canonicalStage) return null;
 
   const current = await db.prepare(
     'SELECT pipeline_stage FROM companies WHERE company_id = ? LIMIT 1'
@@ -273,7 +275,7 @@ export async function autoAdvancePipelineStage(db, companyId, targetStage, logId
   await db.prepare(`
     INSERT INTO pipeline_events (event_id, company_id, from_stage, to_stage, changed_at, trigger_log_id, reason)
     VALUES (?, ?, ?, ?, datetime('now'), ?, ?)
-  `).bind(eventId, companyId, fromStage, canonicalStage, logId, reason).run();
+  `).bind(eventId, companyId, fromStage, canonicalStage, logId ?? null, reason ?? null).run();
 
   return { event_id: eventId, company_id: companyId, from_stage: fromStage, to_stage: canonicalStage };
 }
@@ -365,10 +367,10 @@ export function normalizeContact(raw, companyId) {
   return {
     contact_id: asId(raw?.contact_id) || crypto.randomUUID(),
     company_id: contactCompanyId,
-    first_name: firstName,
-    last_name: lastName,
-    job_title: jobTitle,
-    phone_number: cleanCapped(raw?.phone_number, LIMITS.phone),
+    first_name: firstName || null,
+    last_name: lastName || null,
+    job_title: jobTitle || null,
+    phone_number: cleanCapped(raw?.phone_number, LIMITS.phone) || null,
     // Store only what looks like an address; a mis-transcribed one poisons a
     // D365 import far more expensively than a blank does.
     email_address: email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null,
@@ -431,12 +433,12 @@ export async function upsertContact(db, contact) {
   `).bind(
     contact.contact_id,
     contact.company_id,
-    contact.first_name,
-    contact.last_name,
-    contact.job_title,
-    contact.phone_number,
-    contact.email_address,
-    contact.is_primary_dm
+    contact.first_name ?? null,
+    contact.last_name ?? null,
+    contact.job_title ?? null,
+    contact.phone_number ?? null,
+    contact.email_address ?? null,
+    contact.is_primary_dm ?? 0
   ).run();
 
   return contact.contact_id;
@@ -467,23 +469,23 @@ export function normalizeActivityLog(raw) {
   return {
     log_id: asId(raw?.log_id) || crypto.randomUUID(),
     company_id: companyId,
-    contact_id: asId(raw?.contact_id),
+    contact_id: asId(raw?.contact_id) || null,
     // Client-supplied timestamps let a queue drained three hours later still
     // land on the hour the door was actually knocked. Normalized to D1's own
     // 'YYYY-MM-DD HH:MM:SS' so date filters (string comparisons) stay sound.
     timestamp: toSqlTimestamp(raw?.timestamp),
     ...booleans,
     disposition: matchEnum(raw?.disposition, DISPOSITIONS) || deriveDisposition(booleans),
-    presentation_date: asIsoDate(raw?.presentation_date),
-    enrollment_date: asIsoDate(raw?.enrollment_date),
-    projected_ap: asMoney(raw?.projected_ap),
-    raw_audio_transcription: cleanCapped(raw?.raw_audio_transcription, LIMITS.transcript, { allowNewlines: true }),
+    presentation_date: asIsoDate(raw?.presentation_date) || null,
+    enrollment_date: asIsoDate(raw?.enrollment_date) || null,
+    projected_ap: asMoney(raw?.projected_ap) ?? null,
+    raw_audio_transcription: cleanCapped(raw?.raw_audio_transcription, LIMITS.transcript, { allowNewlines: true }) || null,
     ai_structured_notes: typeof notes === 'string'
-      ? cleanCapped(notes, LIMITS.notes, { allowNewlines: true })
+      ? cleanCapped(notes, LIMITS.notes, { allowNewlines: true }) || null
       : (notes ? JSON.stringify(notes).slice(0, LIMITS.notes) : null),
     sync_tier_status: matchEnum(raw?.sync_tier_status, SYNC_TIERS) || 'PENDING',
-    next_action_date: asIsoDate(raw?.next_action_date),
-    next_action_text: cleanCapped(raw?.next_action_text, 300)
+    next_action_date: asIsoDate(raw?.next_action_date) || null,
+    next_action_text: cleanCapped(raw?.next_action_text, 300) || null
   };
 }
 
@@ -517,20 +519,20 @@ export async function upsertActivityLog(db, log) {
   `).bind(
     log.log_id,
     log.company_id,
-    log.contact_id,
-    log.timestamp,
-    log.is_in_person,
-    log.is_initial,
-    log.is_dm_contact,
+    log.contact_id ?? null,
+    log.timestamp ?? null,
+    log.is_in_person ?? 0,
+    log.is_initial ?? 0,
+    log.is_dm_contact ?? 0,
     log.disposition,
-    log.presentation_date,
-    log.enrollment_date,
-    log.projected_ap,
-    log.raw_audio_transcription,
-    log.ai_structured_notes,
-    log.sync_tier_status,
-    log.next_action_date,
-    log.next_action_text
+    log.presentation_date ?? null,
+    log.enrollment_date ?? null,
+    log.projected_ap ?? null,
+    log.raw_audio_transcription ?? null,
+    log.ai_structured_notes ?? null,
+    log.sync_tier_status || 'PENDING',
+    log.next_action_date ?? null,
+    log.next_action_text ?? null
   ).run();
 
   return log.log_id;

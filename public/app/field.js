@@ -308,17 +308,17 @@ function initNearestAccount() {
 // ---------------------------------------------------------------------
 
 function currentCompanyPayload() {
-  const name = $('companyInput').value.trim();
+  const name = $('companyInput')?.value?.trim();
   if (!name) return null;
   return {
     company_id: state.selectedCompanyId || undefined,
     company_name: name,
-    street_1: $('streetInput').value.trim() || null,
-    city: $('cityInput').value.trim() || null,
-    state: $('stateInput').value.trim() || null,
-    zip_code: $('zipInput').value.trim() || null,
-    lat: state.coords.lat,
-    long: state.coords.long
+    street_1: $('streetInput')?.value?.trim() || null,
+    city: $('cityInput')?.value?.trim() || null,
+    state: $('stateInput')?.value?.trim() || null,
+    zip_code: $('zipInput')?.value?.trim() || null,
+    lat: state.coords?.lat ?? null,
+    long: state.coords?.long ?? null
   };
 }
 
@@ -1094,7 +1094,7 @@ function currentActivityPayload() {
   const company = currentCompanyPayload();
   if (!company) return null;
 
-  const typedNote = $('voiceTranscript').value.trim();
+  const typedNote = $('voiceTranscript')?.value?.trim() || '';
   const logId = crypto.randomUUID();
 
   return {

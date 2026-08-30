@@ -214,25 +214,44 @@ root.post('/transcribe-and-log', async (c) => {
   // Resolve the account first: a log with no valid company_id violates the FK
   // and would 500 after we had already paid for transcription.
   let companyId = asId(form.get('company_id'));
-  const companyJson = form.get('company');
-  if (typeof companyJson === 'string' && companyJson.trim()) {
+  const companyRaw = form.get('company');
+  if (companyRaw) {
     try {
-      const parsedCompany = JSON.parse(companyJson);
-      if ((!parsedCompany.lat || !parsedCompany.long) && parsedCompany.street_1) {
-        const fullAddress = [parsedCompany.street_1, parsedCompany.city || 'Springfield', parsedCompany.state || 'MO', parsedCompany.zip_code]
-          .filter(Boolean)
-          .join(', ');
-        const coords = await geocodeAddress(c.env, fullAddress);
-        if (coords) {
-          parsedCompany.lat = coords.lat;
-          parsedCompany.long = coords.long;
+      let parsedCompany = companyRaw;
+      if (typeof parsedCompany === 'string') {
+        const trimmed = parsedCompany.trim();
+        if (trimmed && trimmed !== 'undefined' && trimmed !== 'null') {
+          try {
+            parsedCompany = JSON.parse(trimmed);
+          } catch {
+            throw new ValidationError('Malformed company JSON payload');
+          }
+        } else {
+          parsedCompany = null;
         }
       }
-      const company = normalizeCompany({ ...parsedCompany, company_id: companyId || undefined });
-      await upsertCompany(c.env.DB, company);
-      companyId = company.company_id;
+      if (parsedCompany && typeof parsedCompany === 'object') {
+        if ((!parsedCompany.lat || !parsedCompany.long) && parsedCompany.street_1) {
+          const fullAddress = [parsedCompany.street_1, parsedCompany.city || 'Springfield', parsedCompany.state || 'MO', parsedCompany.zip_code]
+            .filter(Boolean)
+            .join(', ');
+          try {
+            const coords = await geocodeAddress(c.env, fullAddress);
+            if (coords) {
+              parsedCompany.lat = coords.lat;
+              parsedCompany.long = coords.long;
+            }
+          } catch (geoErr) {
+            console.warn('Geocoding address failed (non-fatal):', geoErr);
+          }
+        }
+        const company = normalizeCompany({ ...parsedCompany, company_id: companyId || parsedCompany.company_id || undefined });
+        await upsertCompany(c.env.DB, company);
+        companyId = company.company_id;
+      }
     } catch (err) {
       if (err instanceof ValidationError) return c.json({ error: err.message }, 400);
+      console.error('Failed to process company in transcribe-and-log:', err);
       return c.json({ error: 'Malformed company payload' }, 400);
     }
   }
@@ -374,20 +393,39 @@ async function writeQueuedLog(env, entry) {
   let companyId = asId(entry?.company_id);
 
   if (entry?.company) {
-    const companyPayload = { ...entry.company, company_id: companyId || entry.company.company_id };
-    if ((!companyPayload.lat || !companyPayload.long) && companyPayload.street_1) {
-      const fullAddress = [companyPayload.street_1, companyPayload.city || 'Springfield', companyPayload.state || 'MO', companyPayload.zip_code]
-        .filter(Boolean)
-        .join(', ');
-      const coords = await geocodeAddress(env, fullAddress);
-      if (coords) {
-        companyPayload.lat = coords.lat;
-        companyPayload.long = coords.long;
+    let parsedCompany = entry.company;
+    if (typeof parsedCompany === 'string') {
+      const trimmed = parsedCompany.trim();
+      if (trimmed && trimmed !== 'undefined' && trimmed !== 'null') {
+        try {
+          parsedCompany = JSON.parse(trimmed);
+        } catch {
+          throw new ValidationError('Malformed company JSON payload');
+        }
+      } else {
+        parsedCompany = null;
       }
     }
-    const company = normalizeCompany(companyPayload);
-    await upsertCompany(env.DB, company);
-    companyId = company.company_id;
+    if (parsedCompany && typeof parsedCompany === 'object') {
+      const companyPayload = { ...parsedCompany, company_id: companyId || parsedCompany.company_id };
+      if ((!companyPayload.lat || !companyPayload.long) && companyPayload.street_1) {
+        const fullAddress = [companyPayload.street_1, companyPayload.city || 'Springfield', companyPayload.state || 'MO', companyPayload.zip_code]
+          .filter(Boolean)
+          .join(', ');
+        try {
+          const coords = await geocodeAddress(env, fullAddress);
+          if (coords) {
+            companyPayload.lat = coords.lat;
+            companyPayload.long = coords.long;
+          }
+        } catch (geoErr) {
+          console.warn('Geocoding address failed (non-fatal):', geoErr);
+        }
+      }
+      const company = normalizeCompany(companyPayload);
+      await upsertCompany(env.DB, company);
+      companyId = company.company_id;
+    }
   }
 
   if (!companyId) throw new ValidationError('company_id or company payload is required');

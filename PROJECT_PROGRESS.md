@@ -8,6 +8,33 @@
 
 ---
 
+## 2026-08-30 17:48 CDT — Fix: Malformed Company Payload & Voice Log Submission in Field View (Agent: Antigravity)
+
+### Session Goal
+Diagnose and remediate critical production bug in Field view voice logging where submitting a recorded note failed with a "Malformed company payload" error due to `undefined` property bindings in `normalizeCompany()` and `upsertCompany()`, harden backend FormData parsing and geocoding, and guarantee dual synchronization (GitHub + Cloudflare).
+
+### Execution Summary
+
+- **Phase 1: Diagnose and Patch Payload Validation (`src/lib/db.js` & `src/routes/activity.js`)**
+  - Identified root cause: in recent data preservation changes, `normalizeCompany()` returned `undefined` for `lead_source`, `rating`, etc. When passed to SQLite/D1 `.bind()`, binding `undefined` threw a `TypeError`/`D1_TYPE_ERROR` inside the company upsert block, which was caught by a generic error handler and emitted `400 Malformed company payload`.
+  - `src/lib/db.js`: Updated `normalizeCompany()` so that unsupplied CRM enum values sanitize cleanly to `null` rather than `undefined`.
+  - `src/lib/db.js`: Hardened `upsertCompany()`, `upsertContact()`, and `upsertActivityLog()` with defensive `?? null` bindings across all parameters, completely preventing `undefined` values from reaching D1/SQLite `.bind()`.
+  - `src/routes/activity.js`: Hardened `POST /api/transcribe-and-log` and `writeQueuedLog()` to safely handle stringified or object company payloads, wrapped geocoding in try/catch to prevent network hiccups from failing the touch, and added specific `ValidationError` vs. unexpected error handling.
+
+- **Phase 2: Audit Frontend Payload Construction (`public/app/field.js` & `public/app/store.js`)**
+  - `public/app/field.js`: Audited `currentCompanyPayload()` and `currentActivityPayload()`, adding defensive optional chaining and clean `null`/`undefined` properties.
+  - `public/app/store.js`: Hardened `uploadVoiceLog()` with explicit type-checking before `JSON.stringify()`, preventing double serialization of already-stringified company data.
+
+- **Phase 3: Audit Auto-Stage Inference Execution (`src/lib/db.js`)**
+  - `src/lib/db.js`: Added defensive null checks in `inferTargetPipelineStage()` and `autoAdvancePipelineStage()` so missing/null dispositions default safely and do not fail database transactions.
+
+- **Phase 4: End-to-End Execution Testing & Dual Synchronization**
+  - `test/worker.test.js`: Added end-to-end unit test simulating `POST /api/transcribe-and-log` via `FormData` with omitted optional CRM fields and `manual_disposition`, verifying successful 200 response and verified DB parameter bindings.
+  - `test/worker.test.js`: Updated `normalizeCompany` unit test assertions.
+  - Test Results: **108/108 tests passing** cleanly (100% pass rate).
+
+---
+
 ## 2026-08-30 17:33 CDT — Phase P4: 5th Tab Pipeline UI (Action Queue on Mobile, Kanban on Desktop) (Agent: Antigravity)
 
 ### Session Goal
