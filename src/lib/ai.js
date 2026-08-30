@@ -240,25 +240,91 @@ export const INDUSTRY_CATEGORIES = [
 ];
 
 /**
- * Classify a company name into one of the 19 standard industry categories using OpenRouter.
+ * Rule-based fallback classifier for B2B company names.
+ */
+export function ruleBasedCategory(companyName) {
+  if (!companyName || typeof companyName !== 'string') return 'Other Commercial';
+  const str = companyName.toLowerCase().trim();
+  if (!str) return 'Other Commercial';
+
+  // High-priority civic & municipal check
+  if (
+    str.startsWith('city of') ||
+    str.startsWith('county of') ||
+    str.includes('chamber of commerce') ||
+    str.includes('emergency services') ||
+    str.includes('regional arts council') ||
+    str.includes('fire department') ||
+    str.includes('police department') ||
+    str.includes('township') ||
+    /civic|public|admin|execut|legislat|polic|\bfire\b|social|church|relig|non-profit|nonprofit/.test(str)
+  ) {
+    return 'Civic & Public Admin';
+  }
+
+  if (/agri|crop|farm|forest|fish|hunt|trap/.test(str)) return 'Agriculture & Forestry';
+  if (/mine|mining|coal|\boil\b|\bgas\b|mineral/.test(str)) return 'Mining & Extraction';
+  if (/contractor|construct|build|plumb|hvac|electric|roof|exterior|fencing|railing/.test(str)) return 'Construction & Trades';
+  if (/manufactur|lumber|wood|furnitur|paper|chemical|plastic|metal|machin|chocolate|bakery|nutrition|doorworks/.test(str)) return 'Manufacturing';
+  if (/transit|railroad|freight|truck|transport|warehous|logistic/.test(str)) return 'Transportation & Logistics';
+  if (/utilit|telephon|telegraph|radio|broadcast|communicat/.test(str)) return 'Utilities & Communications';
+  if (/wholesale|distribut/.test(str)) return 'Wholesale & Distribution';
+  if (/auto|motor|gas station|\bcar\b|vehicle|tire|transmission/.test(str)) return 'Automotive & Dealerships';
+  if (/\beat|eating|eatery|drink|restaurant|hotel|motel|camp|lodg|resort/.test(str)) return 'Hospitality & Food Service';
+  if (/financ|bank|credit|securit|broker|insur|loan/.test(str)) return 'Finance & Insurance';
+  if (/real estate|lessor|propert|title|realty|estate/.test(str)) return 'Real Estate';
+  if (/health|medic|physician|dentist|hospit|nurs|clinic|\blab\b|assisted living|care|grief/.test(str)) return 'Healthcare & Medical';
+  if (/legal|attorney|\blaw\b|engin|account|\bcpa\b|research|manag|comput|tech|data|consult|architect/.test(str)) return 'Professional & Tech Services';
+  if (/laundry|clean|beauty|salon|barber|photo|repair|pest|bug/.test(str)) return 'Personal & Consumer Services';
+  if (/educat|school|colleg|univers|librar|academ|teach|children/.test(str)) return 'Education & Schools';
+  if (/entertain|recreat|amus|museum|sport|gym|theater|theatre|golf|production|magazine|trip|gig/.test(str)) return 'Entertainment & Recreation';
+  if (/retail|store|merchandis|shop|grocer|antique|market|food/.test(str)) return 'Retail Trade';
+
+  return 'Other Commercial';
+}
+
+/**
+ * Classify a company name into one of the 19 standard industry categories using OpenRouter
+ * with deterministic municipal guardrails and rule-based fallback.
  *
  * @param {string} companyName
  * @param {object} env  Worker env bindings with OPENROUTER_API_KEY
- * @returns {Promise<string|null>}
+ * @returns {Promise<string>}
  */
 export async function classifyIndustry(companyName, env) {
-  if (!env?.OPENROUTER_API_KEY || !companyName || typeof companyName !== 'string') return null;
+  if (!companyName || typeof companyName !== 'string') return 'Other Commercial';
+  const name = companyName.trim();
+  if (!name) return 'Other Commercial';
+
+  const lower = name.toLowerCase();
+  // Deterministic pre-checks for municipal & institutional entities
+  if (
+    lower.startsWith('city of') ||
+    lower.startsWith('county of') ||
+    lower.includes('chamber of commerce') ||
+    lower.includes('emergency services') ||
+    lower.includes('regional arts council') ||
+    lower.includes('fire department') ||
+    lower.includes('police department') ||
+    lower.includes('township')
+  ) {
+    return 'Civic & Public Admin';
+  }
+
+  if (!env?.OPENROUTER_API_KEY) {
+    return ruleBasedCategory(name);
+  }
 
   const payload = {
     models: ['z-ai/glm-5.3-flash', 'deepseek/deepseek-v4-flash'],
     messages: [
       {
         role: 'system',
-        content: 'You are an expert B2B territory manager. Classify the following business name into exactly one of these 18 categories based on logic and Springfield, MO regional context.'
+        content: 'You are an expert B2B territory manager. Classify the following business name into exactly one of these 18 categories based on logic and Springfield, MO regional context. Important: municipal governments, public safety, non-profits, civic associations, and community agencies must strictly be classified under "Civic & Public Admin".'
       },
       {
         role: 'user',
-        content: companyName.trim()
+        content: name
       }
     ],
     response_format: {
@@ -294,8 +360,8 @@ export async function classifyIndustry(companyName, env) {
     });
 
     if (!res.ok) {
-      console.warn(`OpenRouter classification failed with HTTP ${res.status}`);
-      return null;
+      console.warn(`OpenRouter classification returned status ${res.status}`);
+      return ruleBasedCategory(name);
     }
 
     const data = await res.json();
@@ -306,10 +372,10 @@ export async function classifyIndustry(companyName, env) {
         return parsed.category;
       }
     }
-    return null;
+    return ruleBasedCategory(name);
   } catch (err) {
-    console.warn(`classifyIndustry error for "${companyName}":`, err.message);
-    return null;
+    console.warn(`classifyIndustry error for "${name}":`, err.message);
+    return ruleBasedCategory(name);
   }
 }
 

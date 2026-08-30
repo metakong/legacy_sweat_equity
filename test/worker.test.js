@@ -526,4 +526,63 @@ test('mapIndustryCategory maps raw D365 industries into 18 standard buckets', as
   assert.equal(mapIndustryCategory(null), 'Other Commercial');
 });
 
+// ---------------------------------------------------------------------
+// AI Classifier & Municipal Guardrails
+// ---------------------------------------------------------------------
+test('classifyIndustry deterministic municipal guardrails enforce Civic & Public Admin', async () => {
+  const { classifyIndustry } = await import('../src/lib/ai.js');
+
+  const entities = [
+    'City of Willard',
+    'City of Lamar Missouri',
+    'City of Monett MO',
+    'Springfield Regional Arts Council',
+    'Stone County Emergency Services',
+    'Greene County Chamber of Commerce',
+    'County of Greene',
+    'Brookline Fire Department',
+    'Ozark Police Department'
+  ];
+
+  for (const name of entities) {
+    const category = await classifyIndustry(name, {});
+    assert.equal(category, 'Civic & Public Admin', `Expected ${name} to be Civic & Public Admin`);
+  }
+});
+
+test('classifyIndustry handles OpenRouter mock response and network fallback', async () => {
+  const { classifyIndustry } = await import('../src/lib/ai.js');
+
+  const originalFetch = globalThis.fetch;
+  try {
+    // Mock OpenRouter successful response
+    globalThis.fetch = async (url, opts) => {
+      if (typeof url === 'string' && url.includes('openrouter.ai')) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: JSON.stringify({ category: 'Manufacturing' })
+            }
+          }]
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return originalFetch(url, opts);
+    };
+
+    const category = await classifyIndustry('Acme Rocket Fuel', { OPENROUTER_API_KEY: 'test-key' });
+    assert.equal(category, 'Manufacturing');
+
+    // Mock OpenRouter failure — should gracefully fall back to rule-based category
+    globalThis.fetch = async () => {
+      throw new Error('Network timeout');
+    };
+
+    const fallbackCat = await classifyIndustry('Joe Plumbing & HVAC Services', { OPENROUTER_API_KEY: 'test-key' });
+    assert.equal(fallbackCat, 'Construction & Trades');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
 

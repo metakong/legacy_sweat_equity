@@ -8,6 +8,28 @@
 
 ---
 
+## 2026-08-30 13:15 CDT — Municipal Entity Guardrails & Test Suite Hardening (Agent: Antigravity)
+
+### Session Goal
+Add high-priority deterministic guardrails to the AI classifier to prevent municipal entity semantic misclassifications, provide robust rule-based fallbacks, add OpenRouter fetch mocks in the test suite, and re-sanitize D1 records.
+
+### Execution Summary
+- **Deterministic Municipal Guardrails (`src/lib/ai.js`)**:
+  - Added deterministic pre-checks in `classifyIndustry(companyName, env)` for municipal and civic keywords (`city of`, `county of`, `chamber of commerce`, `emergency services`, `regional arts council`, `fire department`, `police department`, `township`) routing directly to `Civic & Public Admin`.
+  - Reinforced the OpenRouter system prompt to strictly classify public safety, local government, and community agencies under `Civic & Public Admin`.
+  - Added `ruleBasedCategory()` fallback ensuring robust offline/error categorization without blanking to `Other Commercial`.
+- **Test Suite Hardening (`test/worker.test.js`)**:
+  - Added unit test coverage for deterministic municipal entity guardrails.
+  - Added offline mock handler tests for `classifyIndustry` verifying JSON schema parsing and graceful network error recovery (94 tests passing).
+- **Admin Re-Sanitization (`src/index.js`)**:
+  - Expanded `POST /api/admin/reclassify-industries` to re-scan `Mining & Extraction` and `Other Commercial` records.
+- **Dual Synchronization**:
+  - Committed and pushed to GitHub `origin/main`.
+  - Deployed Worker to Cloudflare (`npm run deploy`).
+  - Executed live reclassification trigger.
+
+---
+
 ## 2026-08-30 13:05 CDT — Edge AI Industry Classification Engine & Live Remediation (Agent: Antigravity)
 
 ### Session Goal

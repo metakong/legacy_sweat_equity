@@ -111,7 +111,7 @@ app.post('/api/admin/reclassify-industries', async (c) => {
   }
 
   const { results } = await c.env.DB.prepare(
-    "SELECT company_id, company_name FROM companies WHERE industry = 'Other Commercial' OR industry IS NULL"
+    "SELECT company_id, company_name, industry FROM companies WHERE industry = 'Other Commercial' OR industry = 'Mining & Extraction' OR industry IS NULL"
   ).all();
 
   const rows = Array.isArray(results) ? results : [];
@@ -124,12 +124,12 @@ app.post('/api/admin/reclassify-industries', async (c) => {
     await Promise.all(chunk.map(async (row) => {
       try {
         const category = await classifyIndustry(row.company_name, c.env);
-        if (category && category !== 'Other Commercial') {
+        if (category && category !== row.industry) {
           await c.env.DB.prepare(
             'UPDATE companies SET industry = ? WHERE company_id = ?'
           ).bind(category, row.company_id).run();
           updated += 1;
-          classifications.push({ company_name: row.company_name, category });
+          classifications.push({ company_name: row.company_name, from: row.industry, category });
         }
       } catch (err) {
         console.warn(`Reclassify error for ${row.company_name}:`, err.message);
