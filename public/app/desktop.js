@@ -23,7 +23,7 @@ import {
   parseNotes
 } from './d365.js';
 import { renderMarkdown } from './markdown.js';
-import { cacheDossier, getQueueCount } from './store.js';
+import { cacheDossier, getCachedDossier, getQueueCount } from './store.js';
 
 const MAX_ROUTE_STOPS = 24;
 const MAX_LEG_STOPS = 12;
@@ -457,8 +457,10 @@ function renderRoute(result, legTitle = null) {
     const group = L.layerGroup();
     L.polyline(points, { color: '#4d8af0', weight: 4, opacity: 0.8 }).addTo(group);
     result.sequence.forEach((stop, index) => {
+      const tooltip = document.createElement('span');
+      tooltip.textContent = `${index + 1}. ${stop.company_name || 'Stop'}`;
       L.marker([stop.lat, stop.long])
-        .bindTooltip(`${index + 1}. ${stop.company_name || 'Stop'}`, { permanent: false })
+        .bindTooltip(tooltip, { permanent: false })
         .addTo(group);
     });
     group.addTo(desktopState.routeMap);
@@ -493,17 +495,20 @@ function renderRoute(result, legTitle = null) {
     (async () => {
       for (const stop of stopsToCache) {
         try {
-          const data = await apiPost('/api/enrich', {
-            company_id: stop.company_id || undefined,
-            company_name: stop.company_name,
-            street_1: stop.street_1,
-            city: stop.city,
-            state: stop.state,
-            zip_code: stop.zip_code
-          });
-          await cacheDossier(stop.company_id || stop.company_name, data);
-          // Small pause between background fetches
-          await new Promise((r) => setTimeout(r, 300));
+          const cached = await getCachedDossier(stop.company_id || stop.company_name);
+          if (!cached) {
+            const data = await apiPost('/api/enrich', {
+              company_id: stop.company_id || undefined,
+              company_name: stop.company_name,
+              street_1: stop.street_1,
+              city: stop.city,
+              state: stop.state,
+              zip_code: stop.zip_code
+            });
+            await cacheDossier(stop.company_id || stop.company_name, data);
+            // Small pause between background fetches
+            await new Promise((r) => setTimeout(r, 300));
+          }
         } catch {
           /* background pre-cache is non-blocking */
         }
@@ -551,7 +556,8 @@ async function clusterRoute() {
   }
 
   desktopState.selectedTargets.clear();
-  const closest = currentlyRenderedTargets.slice(0, 11);
+  const sorted = [...currentlyRenderedTargets].sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
+  const closest = sorted.slice(0, 12);
   closest.forEach((target) => desktopState.selectedTargets.add(target.company_id));
 
   renderRouteTable();

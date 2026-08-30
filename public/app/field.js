@@ -85,28 +85,62 @@ function renderMapPins(companies) {
       ? '📅 Upcoming Renewal'
       : (company.touch_count > 0 ? (company.latest_disposition || 'Follow-Up') : 'Untouched');
 
-    const popupHtml = `
-      <div class="map-popup-card">
-        <div class="map-popup-title">${company.company_name}</div>
-        <div class="map-popup-meta">${[company.street_1, company.city].filter(Boolean).join(', ')}</div>
-        <div class="map-popup-meta">Status: <strong${company.is_renewal_active ? ' style="color:#c084fc;"' : ''}>${statusLabel}</strong></div>
-        ${company.is_renewal_active && company.renewal_date ? `<div class="map-popup-meta" style="color:#c084fc;font-weight:600;">📅 Renewal Date: ${company.renewal_date}</div>` : ''}
-        ${company.latest_next_action ? `<div class="map-popup-meta" style="color:var(--accent-gold);">⚡ ${company.latest_next_action}</div>` : ''}
-        <button class="map-popup-btn" type="button" data-id="${company.company_id}">Select Account</button>
-      </div>
-    `;
+    const popupCard = document.createElement('div');
+    popupCard.className = 'map-popup-card';
 
-    marker.bindPopup(popupHtml);
-    marker.on('popupopen', (e) => {
-      const btn = e.popup.getElement()?.querySelector('.map-popup-btn');
-      if (btn) {
-        btn.addEventListener('click', () => {
-          applyCompany(company);
-          fieldMap.closePopup();
-        });
-      }
+    const titleEl = document.createElement('div');
+    titleEl.className = 'map-popup-title';
+    titleEl.textContent = company.company_name || '';
+    popupCard.appendChild(titleEl);
+
+    const addrText = [company.street_1, company.city].filter(Boolean).join(', ');
+    if (addrText) {
+      const addrEl = document.createElement('div');
+      addrEl.className = 'map-popup-meta';
+      addrEl.textContent = addrText;
+      popupCard.appendChild(addrEl);
+    }
+
+    const statusEl = document.createElement('div');
+    statusEl.className = 'map-popup-meta';
+    statusEl.textContent = 'Status: ';
+    const statusStrong = document.createElement('strong');
+    statusStrong.textContent = statusLabel;
+    if (company.is_renewal_active) {
+      statusStrong.style.color = '#c084fc';
+    }
+    statusEl.appendChild(statusStrong);
+    popupCard.appendChild(statusEl);
+
+    if (company.is_renewal_active && company.renewal_date) {
+      const renewalEl = document.createElement('div');
+      renewalEl.className = 'map-popup-meta';
+      renewalEl.style.color = '#c084fc';
+      renewalEl.style.fontWeight = '600';
+      renewalEl.textContent = `📅 Renewal Date: ${company.renewal_date}`;
+      popupCard.appendChild(renewalEl);
+    }
+
+    if (company.latest_next_action) {
+      const nextEl = document.createElement('div');
+      nextEl.className = 'map-popup-meta';
+      nextEl.style.color = 'var(--accent-gold)';
+      nextEl.textContent = `⚡ ${company.latest_next_action}`;
+      popupCard.appendChild(nextEl);
+    }
+
+    const btn = document.createElement('button');
+    btn.className = 'map-popup-btn';
+    btn.type = 'button';
+    btn.dataset.id = company.company_id || '';
+    btn.textContent = 'Select Account';
+    btn.addEventListener('click', () => {
+      applyCompany(company);
+      fieldMap.closePopup();
     });
+    popupCard.appendChild(btn);
 
+    marker.bindPopup(popupCard);
     companyMarkersLayer.addLayer(marker);
   });
 }
@@ -211,8 +245,7 @@ function currentCompanyPayload() {
     state: $('stateInput').value.trim() || null,
     zip_code: $('zipInput').value.trim() || null,
     lat: state.coords.lat,
-    long: state.coords.long,
-    lead_source: 'Cold Call'
+    long: state.coords.long
   };
 }
 
@@ -909,6 +942,8 @@ function resetForm() {
   $('dossierPanel').hidden = true;
   $('companyInput').value = '';
   $('streetInput').value = '';
+  $('cityInput').value = '';
+  $('stateInput').value = '';
   $('zipInput').value = '';
   clearCompanySelection();
   // Reset 3-tap binary toggles to defaults: In-Person · Initial · Gatekeeper.

@@ -62,8 +62,8 @@ companies.get('/', async (c) => {
   // of today.  We compare ISO date strings which sort correctly (zero-padded).
   const [ty, tm, td] = todayLocal.split('-').map(Number);
   const minus35 = new Date(Date.UTC(ty, tm - 1, td - 35)).toISOString().slice(0, 10);
-  const terminalDispositions = `'Not Interested', 'Disqualified', 'Presentation Scheduled', 'not_interested', 'appointment_set'`;
-  const isEnrolledRenewalActive = `(co.renewal_date IS NOT NULL AND co.renewal_date >= '${minus35}' AND co.renewal_date <= date('${todayLocal}', '+365 days'))`;
+  const terminalDispositions = `'Not Interested', 'Disqualified', 'not_interested', 'appointment_set'`;
+  const isEnrolledRenewalActive = `(co.renewal_date IS NOT NULL AND co.renewal_date >= '${minus35}' AND co.renewal_date <= date('${todayLocal}', '+35 days'))`;
 
   if (untouched) {
     where.push('NOT EXISTS (SELECT 1 FROM activity_logs a WHERE a.company_id = co.company_id)');

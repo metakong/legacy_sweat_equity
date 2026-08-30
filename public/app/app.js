@@ -9,10 +9,12 @@
  * native ES modules served straight from ./public.
  */
 
-import { initViewSwitcher, activateView, isDesktop } from './ui.js';
+import { initViewSwitcher, activateView, isDesktop, apiFetch, apiPost } from './ui.js';
 import { initStore, initConnectivityWatch, onSynced } from './store.js';
 import { initFieldView } from './field.js';
 import { initDesktopViews, refreshActiveDesktopView } from './desktop.js';
+
+export { apiFetch, apiPost };
 
 // Offline capability. Registration failure is not fatal — the app still runs,
 // it just will not survive a cold start without a network.

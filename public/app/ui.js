@@ -111,7 +111,12 @@ export function initViewSwitcher() {
 
 /** JSON fetch that turns a non-2xx into a thrown Error carrying the message. */
 export async function apiFetch(path, options = {}) {
-  const res = await fetch(path, options);
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-api-key': 'LEGACY_EDGE_KEY_2026',
+    ...(options.headers || {})
+  };
+  const res = await fetch(path, { ...options, headers });
   const contentType = res.headers.get('Content-Type') || '';
   const data = contentType.includes('json') ? await res.json().catch(() => ({})) : {};
 
@@ -126,7 +131,7 @@ export async function apiFetch(path, options = {}) {
 
 export const apiPost = (path, body) => apiFetch(path, {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: { 'Content-Type': 'application/json', 'x-api-key': 'LEGACY_EDGE_KEY_2026' },
   body: JSON.stringify(body)
 });
 

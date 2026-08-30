@@ -32,6 +32,7 @@ const EXPORT_SELECT = `
     co.company_id, co.d365_lead_id, co.d365_checksum, co.d365_modified_on,
     co.company_name, co.street_1, co.street_2, co.city, co.state, co.zip_code,
     co.lat, co.long, co.lead_source, co.rating, co.employees, co.industry,
+    co.sic_code, co.account_number, co.post_enrollment_date,
     co.is_d365_synced, co.created_at, co.created_at AS company_created_at,
     ct.first_name, ct.last_name, ct.job_title, ct.phone_number, ct.email_address,
     a.log_id, a.timestamp AS last_touched, a.disposition, a.is_in_person,

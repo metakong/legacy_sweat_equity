@@ -8,6 +8,40 @@
 
 ---
 
+## 2026-08-30 17:15 CDT — Data Preservation, XSS Guardrails, API Auth Middleware & Pre-Cache Fixes (Agent: Antigravity)
+
+### Session Goal
+Execute critical data preservation refactor (prevent CRM rating/source overwrites and coordinate overwriting), fix pipeline visibility and form resets, patch runaway API pre-cache loops, eliminate Leaflet innerHTML XSS vulnerabilities, implement API authentication middleware, and deploy to GitHub and Cloudflare.
+
+### Execution Summary
+
+- **Phase 1: Halt D365 Data Corruption (Data Preservation)**
+  - `public/app/field.js`: Removed hardcoded `lead_source: 'Cold Call'` from `currentCompanyPayload()` so field submissions do not overwrite existing CRM lead sources.
+  - `src/lib/db.js`: Removed default fallbacks (`|| 'Cold'`, `|| 'Cold Call'`) in `normalizeCompany()`, allowing `rating` and `lead_source` to remain `undefined` if unsupplied.
+  - `src/lib/db.js`: In `upsertCompany()`, updated coordinates to preserve existing DB values (`lat = COALESCE(companies.lat, excluded.lat)`, `long = COALESCE(companies.long, excluded.long)`) and preserved existing CRM ratings/sources (`rating = COALESCE(excluded.rating, companies.rating)`, `lead_source = COALESCE(excluded.lead_source, companies.lead_source)`).
+  - `src/lib/db.js` & `src/routes/exports.js`: Added `sic_code`, `account_number`, and `post_enrollment_date` to `ACTIVITY_SELECT` and `EXPORT_SELECT` queries for complete Tier 1, 2, and 3 exports.
+
+- **Phase 2: Fix Funnel Invisibility, Renewals, & Form Resets**
+  - `src/routes/companies.js`: Removed `'Presentation Scheduled'` from `terminalDispositions` so active booked presentations remain visible in pipeline and map views.
+  - `src/routes/companies.js`: Fixed `isEnrolledRenewalActive` upper bound to `date('${todayLocal}', '+35 days')` to enforce the true 35-day renewal window.
+  - `public/app/field.js`: In `resetForm()`, added explicit clears for `cityInput` and `stateInput` so next door logged starts with clean municipality fields.
+
+- **Phase 3: Patch Route Pre-Cache API Burn & Table Clustering**
+  - `public/app/desktop.js`: In `clusterRoute()`, added explicit distance sorting (`.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance))`) and updated slice to 12 stops.
+  - `public/app/desktop.js`: In `renderRoute()`, imported `getCachedDossier` and added `!cached` guard around `apiPost('/api/enrich')` to eliminate redundant Tavily/LLM API calls when switching morning/afternoon legs.
+
+- **Phase 4: PII Security & InnerHTML XSS Guardrails**
+  - `public/app/field.js`: Replaced Leaflet `bindPopup` template string with safe DOM construction (`document.createElement`, `textContent`, direct event handlers).
+  - `public/app/desktop.js`: Replaced Leaflet `bindTooltip` template string with safe `document.createElement('span')`.
+  - `public/app/ui.js`, `public/app/app.js`, `public/app/store.js`: Injected `x-api-key: 'LEGACY_EDGE_KEY_2026'` into `apiFetch`, `apiPost`, and direct fetch requests.
+  - `src/index.js`: Added global `/api/*` authentication middleware checking `x-api-key` against `c.env.API_KEY || 'LEGACY_EDGE_KEY_2026'` (bypassing `/api/health` and OPTIONS) and updated CORS `Access-Control-Allow-Headers`.
+  - `test/worker.test.js`: Updated `normalizeCompany` unit tests to verify `undefined` defaults for `rating` and `lead_source`.
+
+### Test Results
+- `npm test`: **101/101 passed** with zero failures.
+
+---
+
 ## 2026-08-30 16:28 CDT — Production D1 Migrations & Pipeline CRM Schema Foundation (Agent: Antigravity)
 
 ### Session Goal

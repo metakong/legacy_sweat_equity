@@ -276,8 +276,8 @@ test('normalizeCompany requires a name and defaults the CRM option sets', () => 
 
   const company = normalizeCompany({ company_name: 'Ozark Dental Group' });
   assert.equal(company.company_name, 'Ozark Dental Group');
-  assert.equal(company.lead_source, 'Cold Call');
-  assert.equal(company.rating, 'Cold');
+  assert.equal(company.lead_source, undefined);
+  assert.equal(company.rating, undefined);
   assert.equal(company.is_d365_synced, 0);
   assert.ok(company.company_id.length > 0);
 });
@@ -302,14 +302,14 @@ test('normalizeCompany binds only primitives', () => {
   });
   for (const [key, value] of Object.entries(company)) {
     assert.ok(
-      value === null || typeof value === 'string' || typeof value === 'number',
+      value === null || value === undefined || typeof value === 'string' || typeof value === 'number',
       `${key} is a ${typeof value} — D1 would throw on bind`
     );
   }
   assert.equal(company.lat, null);
   assert.equal(company.long, null);
   assert.equal(company.employees, null);
-  assert.equal(company.rating, 'Cold', 'an invalid rating falls back rather than persisting');
+  assert.equal(company.rating, undefined, 'an invalid rating remains undefined rather than persisting');
 });
 
 test('normalizeActivityLog fills a NOT NULL disposition from the binary toggles', () => {

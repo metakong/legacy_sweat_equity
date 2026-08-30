@@ -51,7 +51,7 @@ app.use('*', async (c, next) => {
   // cache never serves one origin's CORS grant to another.
   const corsHeaders = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, x-api-key',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin'
   };
@@ -82,6 +82,24 @@ app.use('*', async (c, next) => {
   if (isHtmlResponse(c.res)) {
     c.res.headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY);
   }
+});
+
+// ---------------------------------------------------------------------
+// API AUTHENTICATION MIDDLEWARE
+// ---------------------------------------------------------------------
+app.use('/api/*', async (c, next) => {
+  const url = new URL(c.req.url);
+  if (url.pathname === '/api/health' || c.req.method === 'OPTIONS') {
+    return next();
+  }
+
+  const expectedKey = c.env?.API_KEY || 'LEGACY_EDGE_KEY_2026';
+  const apiKey = c.req.header('x-api-key');
+  if (apiKey !== expectedKey) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  await next();
 });
 
 // ---------------------------------------------------------------------

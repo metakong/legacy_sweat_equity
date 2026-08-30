@@ -233,7 +233,7 @@ export async function syncQueue() {
       try {
         const res = await fetch('/api/sync', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-api-key': 'LEGACY_EDGE_KEY_2026' },
           body: JSON.stringify({ logs: batch.map(toSyncPayload) })
         });
         if (!res.ok) throw new Error(`Sync rejected (${res.status})`);
@@ -280,7 +280,11 @@ async function uploadVoiceLog(entry) {
   if (entry.contact_id) form.append('contact_id', entry.contact_id);
   if (entry.company) form.append('company', JSON.stringify(entry.company));
 
-  const res = await fetch('/api/transcribe-and-log', { method: 'POST', body: form });
+  const res = await fetch('/api/transcribe-and-log', {
+    method: 'POST',
+    headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026' },
+    body: form
+  });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const error = new Error(data.error || `Upload failed (${res.status})`);
