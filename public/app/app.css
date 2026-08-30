@@ -649,9 +649,9 @@ input[type="checkbox"] {
 /* ── Real-Time Metrics Scoreboard Panel ───────────── */
 .metrics-panel {
   padding: 0.85rem 1.25rem;
-  background: var(--card-bg);
+  background: var(--bg-card);
   border: 1px solid var(--card-border-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
@@ -805,10 +805,28 @@ input[type="checkbox"] {
   border: 1px solid transparent;
 }
 
+:root {
+  /* Darker accent passes WCAG AA (4.5:1) for white text in direct sunlight.
+     Used on .btn-secondary and any inline accent-colored interactive element.
+     The original --accent (#4d8af0) on a dark surface is fine; on mid-grey
+     overlays it can dip below 3:1. */
+  --accent-dark: #2f6fd0;
+}
+
 .pill-hot { background: rgba(239, 68, 68, 0.14); color: #ff8a8a; border-color: rgba(239, 68, 68, 0.3); }
 .pill-warm { background: rgba(245, 166, 35, 0.14); color: var(--accent-gold); border-color: rgba(245, 166, 35, 0.3); }
 .pill-cold { background: rgba(77, 138, 240, 0.12); color: #8fb6f5; border-color: rgba(77, 138, 240, 0.28); }
 .pill-tier { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); border-color: var(--card-border-strong); font-size: 0.64rem; }
+/* EPV prioritization pill — gold border + amber text for visual distinction.
+   Signals "high expected policy value" at a glance on the route planner. */
+.pill-epv {
+  background: rgba(245, 166, 35, 0.12);
+  color: #f5c842;
+  border-color: rgba(245, 166, 35, 0.55);
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  box-shadow: 0 0 6px rgba(245, 166, 35, 0.18);
+}
 
 /* ── Route planner ────────────────────────────────── */
 .route-layout { display: flex; flex-direction: column; gap: 1.25rem; }

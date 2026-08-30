@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS companies (
     lead_source TEXT DEFAULT 'Cold Call',
     rating TEXT DEFAULT 'Cold',
     employees INTEGER, industry TEXT,
+    sic_code TEXT,
+    account_number TEXT,
+    post_enrollment_date TEXT,
     is_d365_synced BOOLEAN DEFAULT 0,
     renewal_date TEXT,
     created_at TEXT DEFAULT (datetime('now'))
@@ -101,3 +104,17 @@ CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(company_name);
 
 -- Contact lookup when building a Tier 1 row for an account.
 CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company_id, is_primary_dm);
+
+-- ---------------------------------------------------------------------
+-- 5. NON-DESTRUCTIVE MIGRATIONS — add new columns to existing production DB.
+--    SQLite silently errors on "duplicate column name", so each is guarded.
+--    Safe to re-run at any time; a no-op if the column already exists.
+--    (D1 MCP rejects multi-statement DDL — run one statement per call.)
+-- ---------------------------------------------------------------------
+-- ALTER TABLE companies ADD COLUMN IF NOT EXISTS sic_code TEXT;
+-- ALTER TABLE companies ADD COLUMN IF NOT EXISTS account_number TEXT;
+-- ALTER TABLE companies ADD COLUMN IF NOT EXISTS post_enrollment_date TEXT;
+--
+-- To apply on production, run each un-commented ALTER via the Cloudflare MCP:
+--   mcp__b974c1ad-f820-4734-9544-136ef3ce9117__d1_database_query
+--     database_id: 847928be-c56f-4de4-bff4-083e08db9140

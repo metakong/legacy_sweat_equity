@@ -911,6 +911,11 @@ function resetForm() {
   $('streetInput').value = '';
   $('zipInput').value = '';
   clearCompanySelection();
+  // Reset 3-tap binary toggles to defaults: In-Person · Initial · Gatekeeper.
+  // Without this, door #N inherits door #(N-1)'s "DM Met" state and the
+  // derived disposition silently reads "Follow-Up Scheduled" instead of the
+  // correct "Gatekeeper Blocked" for a fresh cold approach.
+  setBinaryToggles(1, 1, 0);
 }
 
 // ---------------------------------------------------------------------

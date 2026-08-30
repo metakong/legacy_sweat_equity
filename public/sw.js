@@ -1,11 +1,12 @@
 // Bump on every change to precached asset contents or this file's logic.
-const CACHE_NAME = 'aflac-prospect-v3';
+const CACHE_NAME = 'aflac-prospect-v4';
 
 // Same-origin app shell — install fails if any of these are missing.
 // These are native ES modules; each one is a separate request, so each one
 // has to be listed.
 const CORE_ASSETS = [
   '/app/',
+  '/app/index.html',
   '/app/app.js',
   '/app/ui.js',
   '/app/store.js',

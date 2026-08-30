@@ -68,6 +68,9 @@ export function normalizeCompany(raw) {
     rating: matchEnum(raw?.rating, RATINGS) || 'Cold',
     employees: asCount(raw?.employees, 5_000_000),
     industry: cleanCapped(raw?.industry, LIMITS.industry),
+    sic_code: cleanCapped(raw?.sic_code, 16),
+    account_number: cleanCapped(raw?.account_number, 64),
+    post_enrollment_date: asIsoDate(raw?.post_enrollment_date),
     renewal_date: asIsoDate(raw?.renewal_date),
     // A record only counts as synced once it carries the D365 identity that
     // proves it round-tripped. Trusting a client-sent flag here is how
@@ -88,26 +91,31 @@ export async function upsertCompany(db, company) {
     INSERT INTO companies (
       company_id, d365_lead_id, d365_checksum, d365_modified_on, company_name,
       street_1, street_2, city, state, zip_code, lat, long,
-      lead_source, rating, employees, industry, renewal_date, is_d365_synced
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      lead_source, rating, employees, industry,
+      sic_code, account_number, post_enrollment_date,
+      renewal_date, is_d365_synced
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(company_id) DO UPDATE SET
-      d365_lead_id     = COALESCE(excluded.d365_lead_id, companies.d365_lead_id),
-      d365_checksum    = COALESCE(excluded.d365_checksum, companies.d365_checksum),
-      d365_modified_on = COALESCE(excluded.d365_modified_on, companies.d365_modified_on),
-      company_name     = excluded.company_name,
-      street_1         = COALESCE(excluded.street_1, companies.street_1),
-      street_2         = COALESCE(excluded.street_2, companies.street_2),
-      city             = COALESCE(excluded.city, companies.city),
-      state            = COALESCE(excluded.state, companies.state),
-      zip_code         = COALESCE(excluded.zip_code, companies.zip_code),
-      lat              = COALESCE(excluded.lat, companies.lat),
-      long             = COALESCE(excluded.long, companies.long),
-      lead_source      = excluded.lead_source,
-      rating           = excluded.rating,
-      employees        = COALESCE(excluded.employees, companies.employees),
-      industry         = COALESCE(excluded.industry, companies.industry),
-      renewal_date     = COALESCE(excluded.renewal_date, companies.renewal_date),
-      is_d365_synced   = MAX(excluded.is_d365_synced, companies.is_d365_synced)
+      d365_lead_id        = COALESCE(excluded.d365_lead_id, companies.d365_lead_id),
+      d365_checksum       = COALESCE(excluded.d365_checksum, companies.d365_checksum),
+      d365_modified_on    = COALESCE(excluded.d365_modified_on, companies.d365_modified_on),
+      company_name        = excluded.company_name,
+      street_1            = COALESCE(excluded.street_1, companies.street_1),
+      street_2            = COALESCE(excluded.street_2, companies.street_2),
+      city                = COALESCE(excluded.city, companies.city),
+      state               = COALESCE(excluded.state, companies.state),
+      zip_code            = COALESCE(excluded.zip_code, companies.zip_code),
+      lat                 = COALESCE(excluded.lat, companies.lat),
+      long                = COALESCE(excluded.long, companies.long),
+      lead_source         = excluded.lead_source,
+      rating              = excluded.rating,
+      employees           = COALESCE(excluded.employees, companies.employees),
+      industry            = COALESCE(excluded.industry, companies.industry),
+      sic_code            = COALESCE(excluded.sic_code, companies.sic_code),
+      account_number      = COALESCE(excluded.account_number, companies.account_number),
+      post_enrollment_date = COALESCE(excluded.post_enrollment_date, companies.post_enrollment_date),
+      renewal_date        = COALESCE(excluded.renewal_date, companies.renewal_date),
+      is_d365_synced      = MAX(excluded.is_d365_synced, companies.is_d365_synced)
   `).bind(
     company.company_id,
     company.d365_lead_id,
@@ -125,6 +133,9 @@ export async function upsertCompany(db, company) {
     company.rating,
     company.employees,
     company.industry,
+    company.sic_code,
+    company.account_number,
+    company.post_enrollment_date,
     company.renewal_date,
     company.is_d365_synced
   ).run();

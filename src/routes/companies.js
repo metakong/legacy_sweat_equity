@@ -22,6 +22,7 @@ import {
   upsertContact
 } from '../lib/db.js';
 import { geocodeAddress, classifyIndustry } from '../lib/ai.js';
+import { businessDate, businessDayRangeUtc } from '../lib/time.js';
 
 const companies = new Hono();
 
@@ -54,8 +55,15 @@ companies.get('/', async (c) => {
     binds.push(rating);
   }
 
+  // Renewal window is evaluated once per request in America/Chicago so the
+  // map pins don't flip at 7 PM CDT when UTC midnight crosses the date boundary.
+  const todayLocal = businessDate();
+  // A company is in its renewal window if its renewal_date falls within 35 days
+  // of today.  We compare ISO date strings which sort correctly (zero-padded).
+  const [ty, tm, td] = todayLocal.split('-').map(Number);
+  const minus35 = new Date(Date.UTC(ty, tm - 1, td - 35)).toISOString().slice(0, 10);
   const terminalDispositions = `'Not Interested', 'Disqualified', 'Presentation Scheduled', 'not_interested', 'appointment_set'`;
-  const isEnrolledRenewalActive = `(co.renewal_date IS NOT NULL AND date('now', 'localtime') >= date(co.renewal_date, '-35 days'))`;
+  const isEnrolledRenewalActive = `(co.renewal_date IS NOT NULL AND co.renewal_date >= '${minus35}' AND co.renewal_date <= date('${todayLocal}', '+365 days'))`;
 
   if (untouched) {
     where.push('NOT EXISTS (SELECT 1 FROM activity_logs a WHERE a.company_id = co.company_id)');
@@ -117,8 +125,7 @@ companies.get('/', async (c) => {
                WHERE a.company_id = co.company_id
                ORDER BY a.timestamp DESC LIMIT 1
              ) IN ('Enrolled', 'enrolled')
-             AND co.renewal_date IS NOT NULL
-             AND date('now', 'localtime') >= date(co.renewal_date, '-35 days')
+             AND ${isEnrolledRenewalActive}
              THEN 1
              ELSE 0
            END AS is_renewal_active
@@ -242,17 +249,19 @@ export async function handleImport(c) {
         }
       }
 
-      // AI Industry Classification with graceful fallback
-      if (raw?.company_name) {
+      // AI Industry Classification — only run when D365 did not supply one.
+      // Never overwrite a valid SIC/Industry string from a D365 export with
+      // an AI guess; that destroys curated CRM data on every re-import.
+      if (raw?.company_name && !raw?.industry) {
         try {
           const aiIndustry = await classifyIndustry(raw.company_name, c.env);
           if (aiIndustry) {
             raw.industry = aiIndustry;
-          } else if (!raw.industry) {
+          } else {
             raw.industry = 'Other Commercial';
           }
         } catch {
-          if (!raw.industry) raw.industry = 'Other Commercial';
+          raw.industry = 'Other Commercial';
         }
       }
 
