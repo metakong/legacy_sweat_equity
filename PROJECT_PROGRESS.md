@@ -8,6 +8,27 @@
 
 ---
 
+## 2026-08-30 13:25 CDT — Classification Heuristics Tightening & Regression Suite (Agent: Antigravity)
+
+### Session Goal
+Tighten industry classification rules and guardrails in `src/lib/ai.js` to prevent commercial misclassifications, add dedicated regression unit tests, deploy to Cloudflare, and re-run live D1 database remediation.
+
+### Execution Summary
+- **Refined Heuristics & Guardrails (`src/lib/ai.js`)**:
+  - Tightened municipal guardrail to trigger strictly on structural prefixes (`city of `, `county of `, `town of `, `village of `, `chamber of commerce`, `emergency services`, `regional arts council`).
+  - Added dedicated rules for edge-case commercial domains:
+    - `Professional & Tech Services`: `cpa`, `account`, `tax`, `legal`, `attorney`, `law`, `consult`, `architect`, `bk-dc`, `marketing`, `analytics`.
+    - `Manufacturing`: `walnut`, `timber`, `wood`, `ingredient`, `solutions`, `products`, `cooperage`, `powder`, `chocolate`.
+    - `Utilities & Communications`: `recycling`, `waste`, `disposal`, `natural gas`, `energy`.
+- **Regression Unit Tests (`test/worker.test.js`)**:
+  - Added test suite for edge-case commercial and civic entities (`Missouri Walnut`, `bk-dc.com`, `City of Willard`, `Triple P Recycling`, `LinkOne Ingredient Solutions`, `Summit Natural Gas`) - 95 tests passing.
+- **Dual Synchronization & Live Remediation**:
+  - Committed and pushed to GitHub `origin/main`.
+  - Deployed updated Worker to Cloudflare (`npm run deploy`).
+  - Executed full database re-sanitization via `POST /api/admin/reclassify-industries`.
+
+---
+
 ## 2026-08-30 13:15 CDT — Municipal Entity Guardrails & Test Suite Hardening (Agent: Antigravity)
 
 ### Session Goal

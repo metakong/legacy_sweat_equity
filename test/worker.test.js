@@ -584,5 +584,24 @@ test('classifyIndustry handles OpenRouter mock response and network fallback', a
   }
 });
 
+test('classifyIndustry correctly categorizes tricky commercial and civic edge cases', async () => {
+  const { classifyIndustry } = await import('../src/lib/ai.js');
+
+  const testCases = [
+    { input: 'Missouri Walnut', expected: 'Manufacturing' },
+    { input: 'bk-dc.com', expected: 'Professional & Tech Services' },
+    { input: 'City of Willard', expected: 'Civic & Public Admin' },
+    { input: 'Triple P Recycling', expected: 'Utilities & Communications' },
+    { input: 'LinkOne Ingredient Solutions', expected: 'Manufacturing' },
+    { input: 'Summit Natural Gas', expected: 'Utilities & Communications' }
+  ];
+
+  for (const { input, expected } of testCases) {
+    const category = await classifyIndustry(input, {});
+    assert.equal(category, expected, `Failed for input: "${input}"`);
+  }
+});
+
+
 
 

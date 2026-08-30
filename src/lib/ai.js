@@ -247,38 +247,102 @@ export function ruleBasedCategory(companyName) {
   const str = companyName.toLowerCase().trim();
   if (!str) return 'Other Commercial';
 
-  // High-priority civic & municipal check
+  // 1. Strict municipal and institutional guardrails
   if (
-    str.startsWith('city of') ||
-    str.startsWith('county of') ||
+    str.startsWith('city of ') ||
+    str.startsWith('county of ') ||
+    str.startsWith('town of ') ||
+    str.startsWith('village of ') ||
     str.includes('chamber of commerce') ||
     str.includes('emergency services') ||
     str.includes('regional arts council') ||
     str.includes('fire department') ||
     str.includes('police department') ||
     str.includes('township') ||
-    /civic|public|admin|execut|legislat|polic|\bfire\b|social|church|relig|non-profit|nonprofit/.test(str)
+    /\bnon-?profit\b|\bchurch\b|\bministr|\bdiocese\b|\bcathedral\b|\bparish\b|\bfoundation\b|\bgovernment\b|\bmunicipal\b/.test(str)
   ) {
     return 'Civic & Public Admin';
   }
 
-  if (/agri|crop|farm|forest|fish|hunt|trap/.test(str)) return 'Agriculture & Forestry';
-  if (/mine|mining|coal|\boil\b|\bgas\b|mineral/.test(str)) return 'Mining & Extraction';
-  if (/contractor|construct|build|plumb|hvac|electric|roof|exterior|fencing|railing/.test(str)) return 'Construction & Trades';
-  if (/manufactur|lumber|wood|furnitur|paper|chemical|plastic|metal|machin|chocolate|bakery|nutrition|doorworks/.test(str)) return 'Manufacturing';
-  if (/transit|railroad|freight|truck|transport|warehous|logistic/.test(str)) return 'Transportation & Logistics';
-  if (/utilit|telephon|telegraph|radio|broadcast|communicat/.test(str)) return 'Utilities & Communications';
-  if (/wholesale|distribut/.test(str)) return 'Wholesale & Distribution';
-  if (/auto|motor|gas station|\bcar\b|vehicle|tire|transmission/.test(str)) return 'Automotive & Dealerships';
-  if (/\beat|eating|eatery|drink|restaurant|hotel|motel|camp|lodg|resort/.test(str)) return 'Hospitality & Food Service';
-  if (/financ|bank|credit|securit|broker|insur|loan/.test(str)) return 'Finance & Insurance';
-  if (/real estate|lessor|propert|title|realty|estate/.test(str)) return 'Real Estate';
-  if (/health|medic|physician|dentist|hospit|nurs|clinic|\blab\b|assisted living|care|grief/.test(str)) return 'Healthcare & Medical';
-  if (/legal|attorney|\blaw\b|engin|account|\bcpa\b|research|manag|comput|tech|data|consult|architect/.test(str)) return 'Professional & Tech Services';
-  if (/laundry|clean|beauty|salon|barber|photo|repair|pest|bug/.test(str)) return 'Personal & Consumer Services';
-  if (/educat|school|colleg|univers|librar|academ|teach|children/.test(str)) return 'Education & Schools';
-  if (/entertain|recreat|amus|museum|sport|gym|theater|theatre|golf|production|magazine|trip|gig/.test(str)) return 'Entertainment & Recreation';
-  if (/retail|store|merchandis|shop|grocer|antique|market|food/.test(str)) return 'Retail Trade';
+  // 2. Utilities & Communications
+  if (/\brecycling\b|\bwaste\b|\bdisposal\b|natural gas|\butilit|\btelephon|\btelegraph|\bradio\b|\bbroadcast\b|\bcommunicat/.test(str)) {
+    return 'Utilities & Communications';
+  }
+
+  // 3. Professional & Tech Services
+  if (/legal|attorney|\blaw\b|engin|\baccount|\bcpa\b|\btax\b|research|manag|\bcomput|\btech\b|\bdata\b|consult|architect|marketing|analytics|\bbk-dc\b/.test(str)) {
+    return 'Professional & Tech Services';
+  }
+
+  // 4. Manufacturing
+  if (/manufactur|lumber|\bwood\b|furnitur|paper|chemical|plastic|metal|machin|chocolate|bakery|nutrition|doorworks|\bwalnut\b|\btimber\b|\bcooperage\b|ingredient|\bsolutions\b|\bproducts\b|\bpowder\b/.test(str)) {
+    return 'Manufacturing';
+  }
+
+  // 5. Construction & Trades
+  if (/contractor|construct|build|plumb|hvac|electric|roof|exterior|fencing|railing|\bcabinet/.test(str)) {
+    return 'Construction & Trades';
+  }
+
+  // 6. Transportation & Logistics
+  if (/transit|railroad|freight|\btruck|transport|warehous|logistic|\blogex\b|\btrailiner\b/.test(str)) {
+    return 'Transportation & Logistics';
+  }
+
+  // 7. Automotive & Dealerships
+  if (/auto|motor|gas station|\bcar\b|vehicle|tire|transmission/.test(str)) {
+    return 'Automotive & Dealerships';
+  }
+
+  // 8. Hospitality & Food Service
+  if (/\beat\b|eating|eatery|drink|restaurant|hotel|motel|camp|lodg|resort/.test(str)) {
+    return 'Hospitality & Food Service';
+  }
+
+  // 9. Finance & Insurance
+  if (/financ|bank|credit|securit|broker|insur|\bloan/.test(str)) {
+    return 'Finance & Insurance';
+  }
+
+  // 10. Real Estate
+  if (/real estate|lessor|propert|title|realty|estate|\bzbuyer\b/.test(str)) {
+    return 'Real Estate';
+  }
+
+  // 11. Healthcare & Medical
+  if (/health|medic|physician|dentist|hospit|nurs|clinic|\blab\b|assisted living|care|grief|\bpharmacy\b|\bprosthetic|\bmed-pay\b/.test(str)) {
+    return 'Healthcare & Medical';
+  }
+
+  // 12. Personal & Consumer Services
+  if (/laundry|clean|beauty|salon|barber|photo|repair|pest|\bbug\b/.test(str)) {
+    return 'Personal & Consumer Services';
+  }
+
+  // 13. Education & Schools
+  if (/educat|school|colleg|univers|librar|academ|teach|children/.test(str)) {
+    return 'Education & Schools';
+  }
+
+  // 14. Entertainment & Recreation
+  if (/entertain|recreat|amus|museum|sport|gym|theater|theatre|golf|production|magazine|\btripster\b|\bgigsalad\b|\bballpark/.test(str)) {
+    return 'Entertainment & Recreation';
+  }
+
+  // 15. Retail Trade
+  if (/retail|store|merchandis|shop|grocer|antique|market|\bseed\b|\bblinds\b|\bmusic\b/.test(str)) {
+    return 'Retail Trade';
+  }
+
+  // 16. Agriculture & Forestry
+  if (/agri|crop|farm|forest|fish|hunt|trap/.test(str)) {
+    return 'Agriculture & Forestry';
+  }
+
+  // 17. Mining & Extraction
+  if (/mine|mining|coal|\boil\b|mineral/.test(str)) {
+    return 'Mining & Extraction';
+  }
 
   return 'Other Commercial';
 }
@@ -297,10 +361,12 @@ export async function classifyIndustry(companyName, env) {
   if (!name) return 'Other Commercial';
 
   const lower = name.toLowerCase();
-  // Deterministic pre-checks for municipal & institutional entities
+  // Deterministic pre-checks strictly for municipal & institutional entities
   if (
-    lower.startsWith('city of') ||
-    lower.startsWith('county of') ||
+    lower.startsWith('city of ') ||
+    lower.startsWith('county of ') ||
+    lower.startsWith('town of ') ||
+    lower.startsWith('village of ') ||
     lower.includes('chamber of commerce') ||
     lower.includes('emergency services') ||
     lower.includes('regional arts council') ||

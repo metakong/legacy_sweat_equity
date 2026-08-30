@@ -111,7 +111,7 @@ app.post('/api/admin/reclassify-industries', async (c) => {
   }
 
   const { results } = await c.env.DB.prepare(
-    "SELECT company_id, company_name, industry FROM companies WHERE industry = 'Other Commercial' OR industry = 'Mining & Extraction' OR industry IS NULL"
+    'SELECT company_id, company_name, industry FROM companies'
   ).all();
 
   const rows = Array.isArray(results) ? results : [];
