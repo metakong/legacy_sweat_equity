@@ -8,6 +8,45 @@
 
 ---
 
+## 2026-08-30 12:20 CDT — 18-Bucket Industry Consolidation & Live D1 Ingestion Normalization (Agent: Antigravity)
+
+### Session Goal
+Implement standard 18-bucket industry consolidation mapping for D365 imports, Route Planner filtering, and execute a live database remediation across all 201 production D1 company records.
+
+### Execution Summary
+- **18-Bucket Industry Mapping (`public/app/desktop.js`)**:
+  - Implemented `mapIndustryCategory(rawIndustry)` categorizing freeform/D365 industry strings into 18 standard B2B industry buckets:
+    1. Agriculture & Forestry
+    2. Mining & Extraction
+    3. Construction & Trades
+    4. Manufacturing
+    5. Transportation & Logistics
+    6. Utilities & Communications
+    7. Wholesale & Distribution
+    8. Automotive & Dealerships
+    9. Hospitality & Food Service
+    10. Finance & Insurance
+    11. Real Estate
+    12. Healthcare & Medical
+    13. Professional & Tech Services
+    14. Personal & Consumer Services
+    15. Education & Schools
+    16. Entertainment & Recreation
+    17. Civic & Public Admin
+    18. Retail Trade
+    *(Fallback: Other Commercial)*
+  - Integrated mapping into `parseAndDeduplicate()` so all imported leads are categorized upon ingestion.
+- **Live Database Remediation**:
+  - Query snapshot of all 201 production company records from Cloudflare D1 (`legacy-db`).
+  - Executed 201 `UPDATE companies SET industry = ...` statements mapping legacy strings to standardized categories.
+- **Testing & Verification**:
+  - Added unit test suite in `test/worker.test.js` validating all 18 buckets and edge-case keyword collisions (92 tests passing).
+- **Dual Synchronization**:
+  - Pushed commits to GitHub `origin/main`.
+  - Deployed Worker and static assets to Cloudflare via `npm run deploy`.
+
+---
+
 ## 2026-08-30 12:00 CDT — Route Planner Compass Quadrant Filtering, Employee Sorting, GPS Refresh & Skip Toggle (Agent: Antigravity)
 
 ### Session Goal

@@ -497,3 +497,33 @@ test('imported company normalizes with contacts array structure', () => {
   assert.equal(contact2.first_name, 'Sara');
 });
 
+// ---------------------------------------------------------------------
+// 18-Bucket Industry Mapping
+// ---------------------------------------------------------------------
+test('mapIndustryCategory maps raw D365 industries into 18 standard buckets', async () => {
+  const { mapIndustryCategory } = await import('../public/app/desktop.js');
+
+  assert.equal(mapIndustryCategory('Poultry Farming & Crops'), 'Agriculture & Forestry');
+  assert.equal(mapIndustryCategory('Oil & Gas Extraction'), 'Mining & Extraction');
+  assert.equal(mapIndustryCategory('General Contractors & Roofing'), 'Construction & Trades');
+  assert.equal(mapIndustryCategory('Precision Metal Machining'), 'Manufacturing');
+  assert.equal(mapIndustryCategory('Freight Warehousing & Logistics'), 'Transportation & Logistics');
+  assert.equal(mapIndustryCategory('Telecommunications & Broadcast Radio'), 'Utilities & Communications');
+  assert.equal(mapIndustryCategory('Wholesale Food Distributors'), 'Wholesale & Distribution');
+  assert.equal(mapIndustryCategory('Automotive Dealership and Repair'), 'Automotive & Dealerships');
+  assert.equal(mapIndustryCategory('Hotel & Restaurant Lodging'), 'Hospitality & Food Service');
+  assert.equal(mapIndustryCategory('Commercial Banking & Insurance Brokerage'), 'Finance & Insurance');
+  assert.equal(mapIndustryCategory('Commercial Real Estate & Property Title'), 'Real Estate');
+  assert.equal(mapIndustryCategory('Hospital, Clinic & Dentist Practice'), 'Healthcare & Medical');
+  assert.equal(mapIndustryCategory('Legal Attorney & CPA Accounting Advisory'), 'Professional & Tech Services');
+  assert.equal(mapIndustryCategory('Dry Cleaning & Hair Salon Services'), 'Personal & Consumer Services');
+  assert.equal(mapIndustryCategory('Higher Education & University Academy'), 'Education & Schools');
+  assert.equal(mapIndustryCategory('Theater, Golf Club & Sports Complex'), 'Entertainment & Recreation');
+  assert.equal(mapIndustryCategory('Non-Profit Civic Association & Police Admin'), 'Civic & Public Admin');
+  assert.equal(mapIndustryCategory('Retail Grocery Store & Merchandise Shop'), 'Retail Trade');
+  assert.equal(mapIndustryCategory('Unknown Venture LLC'), 'Other Commercial');
+  assert.equal(mapIndustryCategory(''), 'Other Commercial');
+  assert.equal(mapIndustryCategory(null), 'Other Commercial');
+});
+
+

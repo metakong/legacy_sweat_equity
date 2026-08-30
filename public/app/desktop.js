@@ -845,6 +845,107 @@ const D365_IMPORT_MAP = {
 const CONTACT_FIELDS = new Set(['first_name', 'last_name', 'phone_number', 'email_address', 'job_title']);
 
 /**
+ * Map raw D365 industry string into one of the 18 consolidated industry buckets.
+ */
+export function mapIndustryCategory(rawIndustry) {
+  if (!rawIndustry || typeof rawIndustry !== 'string') return 'Other Commercial';
+  const str = rawIndustry.toLowerCase().trim();
+  if (!str) return 'Other Commercial';
+
+  // 1. Agriculture & Forestry (agri, crop, farm, forest, fish, hunt, trap)
+  if (/agri|crop|farm|forest|fish|hunt|trap/.test(str)) {
+    return 'Agriculture & Forestry';
+  }
+
+  // 2. Mining & Extraction (mine, mining, coal, oil, gas, mineral)
+  if (/mine|mining|coal|\boil\b|gas|mineral/.test(str)) {
+    return 'Mining & Extraction';
+  }
+
+  // 3. Construction & Trades (contractor, construct, build, plumb, hvac, electric, roof)
+  if (/contractor|construct|build|plumb|hvac|electric|roof/.test(str)) {
+    return 'Construction & Trades';
+  }
+
+  // 4. Manufacturing (manufactur, lumber, wood, furnitur, paper, chemical, plastic, metal, machin)
+  if (/manufactur|lumber|wood|furnitur|paper|chemical|plastic|metal|machin/.test(str)) {
+    return 'Manufacturing';
+  }
+
+  // 5. Transportation & Logistics (transit, railroad, freight, truck, transport, warehous, logistic)
+  if (/transit|railroad|freight|truck|transport|warehous|logistic/.test(str)) {
+    return 'Transportation & Logistics';
+  }
+
+  // 6. Utilities & Communications (utilit, telephon, telegraph, radio, broadcast, communicat)
+  if (/utilit|telephon|telegraph|radio|broadcast|communicat/.test(str)) {
+    return 'Utilities & Communications';
+  }
+
+  // 7. Wholesale & Distribution (wholesale, distribut)
+  if (/wholesale|distribut/.test(str)) {
+    return 'Wholesale & Distribution';
+  }
+
+  // 8. Automotive & Dealerships (auto, motor, gas station, car, vehicle, tire)
+  if (/auto|motor|gas station|\bcar\b|vehicle|tire/.test(str)) {
+    return 'Automotive & Dealerships';
+  }
+
+  // 9. Hospitality & Food Service (eat, drink, restaurant, hotel, motel, camp, lodg)
+  if (/\beat|eating|eatery|drink|restaurant|hotel|motel|camp|lodg/.test(str)) {
+    return 'Hospitality & Food Service';
+  }
+
+  // 10. Finance & Insurance (financ, bank, credit, securit, broker, insur)
+  if (/financ|bank|credit|securit|broker|insur/.test(str)) {
+    return 'Finance & Insurance';
+  }
+
+  // 11. Real Estate (real estate, lessor, propert, title)
+  if (/real estate|lessor|propert|title/.test(str)) {
+    return 'Real Estate';
+  }
+
+  // 12. Healthcare & Medical (health, medic, physician, dentist, hospit, nurs, clinic, lab)
+  if (/health|medic|physician|dentist|hospit|nurs|clinic|\blab\b/.test(str)) {
+    return 'Healthcare & Medical';
+  }
+
+  // 13. Professional & Tech Services (legal, attorney, law, engin, account, cpa, research, manag, comput, tech, data, consult)
+  if (/legal|attorney|\blaw\b|engin|account|\bcpa\b|research|manag|comput|tech|data|consult/.test(str)) {
+    return 'Professional & Tech Services';
+  }
+
+  // 14. Personal & Consumer Services (laundry, clean, beauty, salon, barber, photo, repair)
+  if (/laundry|clean|beauty|salon|barber|photo|repair/.test(str)) {
+    return 'Personal & Consumer Services';
+  }
+
+  // 15. Education & Schools (educat, school, colleg, univers, librar, academ, teach)
+  if (/educat|school|colleg|univers|librar|academ|teach/.test(str)) {
+    return 'Education & Schools';
+  }
+
+  // 16. Entertainment & Recreation (entertain, recreat, amus, museum, sport, gym, theater, golf)
+  if (/entertain|recreat|amus|museum|sport|gym|theater|theatre|golf/.test(str)) {
+    return 'Entertainment & Recreation';
+  }
+
+  // 17. Civic & Public Admin (civic, public, admin, execut, legislat, polic, fire, social, church, relig, non-profit)
+  if (/civic|public|admin|execut|legislat|polic|\bfire\b|social|church|relig|non-profit|nonprofit/.test(str)) {
+    return 'Civic & Public Admin';
+  }
+
+  // 18. Retail Trade (retail, store, merchandis, shop, grocer)
+  if (/retail|store|merchandis|shop|grocer/.test(str)) {
+    return 'Retail Trade';
+  }
+
+  return 'Other Commercial';
+}
+
+/**
  * Read a .xlsx or .csv file with SheetJS, map D365 column headers to internal
  * field names, then deduplicate rows by Business Name (uppercased/trimmed).
  * Returns an array of { company fields, contacts: [{ contact fields }] }.
@@ -897,6 +998,9 @@ async function parseAndDeduplicate(file) {
         if (!CONTACT_FIELDS.has(field)) {
           company[field] = value;
         }
+      }
+      if (company.industry) {
+        company.industry = mapIndustryCategory(company.industry);
       }
       company.contacts = [];
       companyMap.set(key, company);
