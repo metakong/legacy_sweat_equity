@@ -21,7 +21,7 @@ import {
   upsertCompany,
   upsertContact
 } from '../lib/db.js';
-import { geocodeAddress } from '../lib/ai.js';
+import { geocodeAddress, classifyIndustry } from '../lib/ai.js';
 
 const companies = new Hono();
 
@@ -239,6 +239,20 @@ export async function handleImport(c) {
           raw.lat = coords.lat;
           raw.long = coords.long;
           geocoded += 1;
+        }
+      }
+
+      // AI Industry Classification with graceful fallback
+      if (raw?.company_name) {
+        try {
+          const aiIndustry = await classifyIndustry(raw.company_name, c.env);
+          if (aiIndustry) {
+            raw.industry = aiIndustry;
+          } else if (!raw.industry) {
+            raw.industry = 'Other Commercial';
+          }
+        } catch {
+          if (!raw.industry) raw.industry = 'Other Commercial';
         }
       }
 

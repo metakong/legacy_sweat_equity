@@ -215,6 +215,105 @@ export async function tavilySearch(env, query, {
 }
 
 /**
+ * 19 standard industry categories (18 consolidated buckets + Other Commercial).
+ */
+export const INDUSTRY_CATEGORIES = [
+  'Agriculture & Forestry',
+  'Mining & Extraction',
+  'Construction & Trades',
+  'Manufacturing',
+  'Transportation & Logistics',
+  'Utilities & Communications',
+  'Wholesale & Distribution',
+  'Automotive & Dealerships',
+  'Hospitality & Food Service',
+  'Finance & Insurance',
+  'Real Estate',
+  'Healthcare & Medical',
+  'Professional & Tech Services',
+  'Personal & Consumer Services',
+  'Education & Schools',
+  'Entertainment & Recreation',
+  'Civic & Public Admin',
+  'Retail Trade',
+  'Other Commercial'
+];
+
+/**
+ * Classify a company name into one of the 19 standard industry categories using OpenRouter.
+ *
+ * @param {string} companyName
+ * @param {object} env  Worker env bindings with OPENROUTER_API_KEY
+ * @returns {Promise<string|null>}
+ */
+export async function classifyIndustry(companyName, env) {
+  if (!env?.OPENROUTER_API_KEY || !companyName || typeof companyName !== 'string') return null;
+
+  const payload = {
+    models: ['z-ai/glm-5.3-flash', 'deepseek/deepseek-v4-flash'],
+    messages: [
+      {
+        role: 'system',
+        content: 'You are an expert B2B territory manager. Classify the following business name into exactly one of these 18 categories based on logic and Springfield, MO regional context.'
+      },
+      {
+        role: 'user',
+        content: companyName.trim()
+      }
+    ],
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'industry_classification',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: {
+            category: {
+              type: 'string',
+              enum: INDUSTRY_CATEGORIES
+            }
+          },
+          required: ['category'],
+          additionalProperties: false
+        }
+      }
+    },
+    temperature: 0.1
+  };
+
+  try {
+    const res = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000)
+    });
+
+    if (!res.ok) {
+      console.warn(`OpenRouter classification failed with HTTP ${res.status}`);
+      return null;
+    }
+
+    const data = await res.json();
+    const content = data?.choices?.[0]?.message?.content;
+    if (content) {
+      const parsed = typeof content === 'object' ? content : JSON.parse(content);
+      if (parsed?.category && INDUSTRY_CATEGORIES.includes(parsed.category)) {
+        return parsed.category;
+      }
+    }
+    return null;
+  } catch (err) {
+    console.warn(`classifyIndustry error for "${companyName}":`, err.message);
+    return null;
+  }
+}
+
+/**
  * Geocode a street address via Mapbox Geocoding v5.
  *
  * @param {object} env  Worker env bindings with MAPBOX_TOKEN
@@ -241,4 +340,6 @@ export async function geocodeAddress(env, addressStr) {
     return null;
   }
 }
+
+
 

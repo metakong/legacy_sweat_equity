@@ -34,6 +34,7 @@ import enrichRouter from './routes/enrich.js';
 import eodRouter from './routes/eod.js';
 import routingRouter from './routes/routing.js';
 import exportsRouter from './routes/exports.js';
+import { classifyIndustry } from './lib/ai.js';
 
 const app = new Hono();
 
@@ -100,6 +101,49 @@ app.route('/api/activity', activityRouter);
 // /api/transcribe-and-log and /api/sync are part of the external contract and
 // live at the API root rather than under /api/activity.
 app.route('/api', activityRootRouter);
+
+/**
+ * POST /api/admin/reclassify-industries — reclassify unclassified/generic companies using OpenRouter AI.
+ */
+app.post('/api/admin/reclassify-industries', async (c) => {
+  if (!c.env.OPENROUTER_API_KEY) {
+    return c.json({ error: 'OPENROUTER_API_KEY is not configured' }, 503);
+  }
+
+  const { results } = await c.env.DB.prepare(
+    "SELECT company_id, company_name FROM companies WHERE industry = 'Other Commercial' OR industry IS NULL"
+  ).all();
+
+  const rows = Array.isArray(results) ? results : [];
+  let updated = 0;
+  const classifications = [];
+
+  const BATCH_SIZE = 5;
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const chunk = rows.slice(i, i + BATCH_SIZE);
+    await Promise.all(chunk.map(async (row) => {
+      try {
+        const category = await classifyIndustry(row.company_name, c.env);
+        if (category && category !== 'Other Commercial') {
+          await c.env.DB.prepare(
+            'UPDATE companies SET industry = ? WHERE company_id = ?'
+          ).bind(category, row.company_id).run();
+          updated += 1;
+          classifications.push({ company_name: row.company_name, category });
+        }
+      } catch (err) {
+        console.warn(`Reclassify error for ${row.company_name}:`, err.message);
+      }
+    }));
+  }
+
+  return c.json({
+    status: 'success',
+    total_scanned: rows.length,
+    updated,
+    classifications
+  });
+});
 
 app.get('/api/health', (c) => c.json({
   status: 'ok',

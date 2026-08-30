@@ -8,6 +8,26 @@
 
 ---
 
+## 2026-08-30 13:05 CDT — Edge AI Industry Classification Engine & Live Remediation (Agent: Antigravity)
+
+### Session Goal
+Move OpenRouter structured JSON schema industry classification engine directly into Cloudflare Worker edge environment (`src/lib/ai.js`, `src/routes/companies.js`, `src/index.js`) using `env.OPENROUTER_API_KEY`, integrate into the import pipeline, and execute live edge remediation.
+
+### Execution Summary
+- **Edge AI Classification Function (`src/lib/ai.js`)**:
+  - Implemented `classifyIndustry(companyName, env)` utilizing OpenRouter `json_schema` strict structured output across fallback models (`z-ai/glm-5.3-flash`, `deepseek/deepseek-v4-flash`).
+- **Import Pipeline Integration (`src/routes/companies.js`)**:
+  - Integrated `classifyIndustry` directly into `handleImport()` to categorize newly ingested D365 leads on the edge.
+- **Admin Remediation Endpoint (`src/index.js`)**:
+  - Added `POST /api/admin/reclassify-industries` querying unclassified companies and executing AI reclassification with D1 updates in concurrent batches.
+- **Dual Synchronization & Live Deployment**:
+  - Verified all 92 unit tests passing (`npm test`).
+  - Committed and pushed to GitHub `origin/main`.
+  - Deployed Worker to Cloudflare (`npm run deploy`).
+  - Triggered live reclassification via `POST /api/admin/reclassify-industries`.
+
+---
+
 ## 2026-08-30 13:00 CDT — Retroactive D1 AI Industry Classification (Agent: Antigravity)
 
 ### Session Goal
