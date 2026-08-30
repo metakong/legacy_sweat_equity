@@ -105,9 +105,6 @@ async function loadTargets() {
 
     desktopState.targets = masterRouteTargets;
 
-    // Populate dynamic industry filter options
-    populateIndustryFilter();
-
     // Render table with filtering, quadrant matching, and sorting
     renderRouteTable();
 
@@ -144,35 +141,6 @@ async function refreshGpsLocation() {
     showToast(`Location error: ${err.message}`, 'error');
   } finally {
     setButtonBusy(btn, false);
-  }
-}
-
-function populateIndustryFilter() {
-  const select = $('routeIndustrySelect');
-  if (!select) return;
-
-  const currentVal = select.value;
-  const industries = new Set();
-  for (const t of masterRouteTargets) {
-    if (t.industry && typeof t.industry === 'string' && t.industry.trim().length > 0) {
-      industries.add(t.industry.trim());
-    }
-  }
-
-  const sortedIndustries = Array.from(industries).sort((a, b) => a.localeCompare(b));
-
-  select.replaceChildren(
-    el('option', { attrs: { value: 'all' }, text: 'All Industries' }),
-    ...sortedIndustries.map((ind) => el('option', {
-      attrs: { value: ind, ...(ind === currentVal ? { selected: 'selected' } : {}) },
-      text: ind
-    }))
-  );
-
-  if (currentVal && industries.has(currentVal)) {
-    select.value = currentVal;
-  } else {
-    select.value = 'all';
   }
 }
 
@@ -238,8 +206,10 @@ function renderRouteTable() {
   // 2. Sort
   filtered.sort((a, b) => {
     if (sortColumn === 'employees') {
-      const empA = a.employees !== null && a.employees !== undefined ? Number(a.employees) : (sortOrder === 'asc' ? Infinity : -Infinity);
-      const empB = b.employees !== null && b.employees !== undefined ? Number(b.employees) : (sortOrder === 'asc' ? Infinity : -Infinity);
+      const rawA = a.employees !== null && a.employees !== undefined ? parseInt(a.employees, 10) : NaN;
+      const rawB = b.employees !== null && b.employees !== undefined ? parseInt(b.employees, 10) : NaN;
+      const empA = !Number.isNaN(rawA) ? rawA : (sortOrder === 'asc' ? Infinity : -Infinity);
+      const empB = !Number.isNaN(rawB) ? rawB : (sortOrder === 'asc' ? Infinity : -Infinity);
       if (empA !== empB) {
         return sortOrder === 'asc' ? empA - empB : empB - empA;
       }
@@ -258,9 +228,19 @@ function renderRouteTable() {
   currentlyRenderedTargets = filtered;
   desktopState.targets = filtered;
 
+  // Update Reset Skips button visibility
+  const resetSkipsBtn = $('resetSkipsBtn');
+  if (resetSkipsBtn) {
+    resetSkipsBtn.style.display = skippedTargets.size > 0 ? 'inline-block' : 'none';
+  }
+
   if (filtered.length === 0) {
     body.replaceChildren(el('tr', {
-      children: [el('td', { className: 'empty-cell', text: 'No matching accounts found.', attrs: { colspan: '6' } })]
+      children: [el('td', {
+        className: 'empty-cell',
+        text: 'No targets match your current filters.',
+        attrs: { colspan: '6', style: 'text-align:center; padding: 2rem; color: #6b7280;' }
+      })]
     }));
     updateSelectAllCheckboxState();
     return;
@@ -309,6 +289,8 @@ function renderRouteTable() {
       e.stopPropagation();
       skippedTargets.add(target.company_id);
       desktopState.selectedTargets.delete(target.company_id);
+      const resetBtn = $('resetSkipsBtn');
+      if (resetBtn) resetBtn.style.display = 'inline-block';
       renderRouteTable();
       showToast(`Skipped ${target.company_name} for this session.`, 'info');
     });
@@ -492,6 +474,16 @@ function initRouteTab() {
   const refreshLocationBtn = $('refreshLocationBtn');
   if (refreshLocationBtn) {
     refreshLocationBtn.addEventListener('click', refreshGpsLocation);
+  }
+
+  const resetSkipsBtn = $('resetSkipsBtn');
+  if (resetSkipsBtn) {
+    resetSkipsBtn.addEventListener('click', () => {
+      skippedTargets.clear();
+      resetSkipsBtn.style.display = 'none';
+      renderRouteTable();
+      showToast('All skipped accounts restored.', 'success');
+    });
   }
 
   const sortDistTh = $('sortDistance');

@@ -8,6 +8,29 @@
 
 ---
 
+## 2026-08-30 12:35 CDT — Static 19-Bucket Industry Dropdown, Integer Sorting & Skip Reset (Agent: Antigravity)
+
+### Session Goal
+Fix Route Planner industry dropdown to permanently show all 19 standard industry categories, fix numeric integer sorting for the employees column, add an empty-state filter message, and implement a "Reset Skips" control.
+
+### Execution Summary
+- **Static Industry Dropdown (`public/app/index.html`, `public/app/desktop.js`)**:
+  - Hardcoded the 19 standard industry options into `#routeIndustrySelect` in `index.html`.
+  - Removed dynamic options wipe/population logic in `desktop.js` to ensure all standard industry buckets remain selectable regardless of current record distribution.
+- **Integer Headcount Sorting (`public/app/desktop.js`)**:
+  - Refactored `employees` sort logic using `parseInt(t.employees, 10)` to ensure mathematical integer ordering.
+- **Empty State UX (`public/app/desktop.js`)**:
+  - Rendered a styled, centered empty-state row when filters produce 0 results (`No targets match your current filters.`).
+- **Reset Skips Toggle (`public/app/index.html`, `public/app/desktop.js`)**:
+  - Added `#resetSkipsBtn` (`↺ Reset Skips`) next to the location refresh button.
+  - Dynamically reveals `#resetSkipsBtn` whenever accounts are skipped and hides it when all skips are cleared.
+- **Dual Synchronization**:
+  - Verified all 92 unit tests passing (`npm test`).
+  - Committed and pushed to GitHub `origin/main`.
+  - Deployed Worker and static assets to Cloudflare (`npm run deploy`).
+
+---
+
 ## 2026-08-30 12:20 CDT — 18-Bucket Industry Consolidation & Live D1 Ingestion Normalization (Agent: Antigravity)
 
 ### Session Goal
