@@ -54,6 +54,12 @@
           </button>
         </li>
         <li>
+          <button class="nav-item" type="button" role="tab" id="tab-pipeline"
+                  data-view="pipeline" aria-selected="false" aria-controls="view-pipeline">
+            <span class="nav-icon" aria-hidden="true">📊</span> Pipeline
+          </button>
+        </li>
+        <li>
           <button class="nav-item" type="button" role="tab" id="tab-data-management"
                   data-view="data-management" aria-selected="false" aria-controls="view-data-management">
             <span class="nav-icon" aria-hidden="true">🗄️</span> Data Management
@@ -525,6 +531,95 @@
         </main>
       </section>
 
+      <!-- ==========================================================
+           VIEW 5 — PIPELINE CRM (Action Queue on Mobile, Kanban on Desktop)
+           ========================================================== -->
+      <section class="view" id="view-pipeline" role="tabpanel" aria-labelledby="tab-pipeline" hidden>
+        <main class="wide pipeline-main">
+          <!-- Mobile Action Queue View -->
+          <div class="pipeline-mobile-view">
+            <div class="panel">
+              <div class="panel-head">
+                <h2>⚡ Action Queue</h2>
+                <span class="badge" id="actionQueueCount">0 Tasks</span>
+              </div>
+              <div class="segmented-control" id="pipelineSegmentedControl" role="tablist" aria-label="Action Queue Filter">
+                <button type="button" class="segment-btn active" data-segment="NOW" role="tab" aria-selected="true">🔥 NOW</button>
+                <button type="button" class="segment-btn" data-segment="TODAY" role="tab" aria-selected="false">📅 TODAY</button>
+                <button type="button" class="segment-btn" data-segment="THIS_WEEK" role="tab" aria-selected="false">🗓️ WEEK</button>
+                <button type="button" class="segment-btn" data-segment="WON" role="tab" aria-selected="false">🏆 WON</button>
+              </div>
+              <div class="action-queue-list" id="pipelineActionQueue" aria-live="polite">
+                <!-- Rendered dynamically -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Desktop Kanban View -->
+          <div class="pipeline-desktop-view">
+            <div class="panel">
+              <div class="panel-head">
+                <h2>📊 B2B Deal-Flow Pipeline</h2>
+                <div class="panel-actions">
+                  <button class="btn-secondary btn-inline" id="btnRefreshPipeline" type="button">🔄 Refresh</button>
+                  <span class="pipeline-summary-badge" id="pipelineSummaryBadge">Total Pipeline: $0 AP</span>
+                </div>
+              </div>
+
+              <div class="kanban-board" id="kanbanBoard">
+                <div class="kanban-column" data-stage="PROSPECT">
+                  <div class="kanban-column-header">
+                    <span class="stage-name">PROSPECT</span>
+                    <span class="stage-meta" id="meta-PROSPECT">0 · $0</span>
+                  </div>
+                  <div class="kanban-cards" id="cards-PROSPECT"></div>
+                </div>
+
+                <div class="kanban-column" data-stage="ENGAGED">
+                  <div class="kanban-column-header">
+                    <span class="stage-name">ENGAGED</span>
+                    <span class="stage-meta" id="meta-ENGAGED">0 · $0</span>
+                  </div>
+                  <div class="kanban-cards" id="cards-ENGAGED"></div>
+                </div>
+
+                <div class="kanban-column" data-stage="QUALIFIED">
+                  <div class="kanban-column-header">
+                    <span class="stage-name">QUALIFIED</span>
+                    <span class="stage-meta" id="meta-QUALIFIED">0 · $0</span>
+                  </div>
+                  <div class="kanban-cards" id="cards-QUALIFIED"></div>
+                </div>
+
+                <div class="kanban-column" data-stage="PROPOSAL">
+                  <div class="kanban-column-header">
+                    <span class="stage-name">PROPOSAL</span>
+                    <span class="stage-meta" id="meta-PROPOSAL">0 · $0</span>
+                  </div>
+                  <div class="kanban-cards" id="cards-PROPOSAL"></div>
+                </div>
+
+                <div class="kanban-column kanban-column-terminal" data-stage="CLOSED_WON">
+                  <div class="kanban-column-header">
+                    <span class="stage-name">🏆 WON</span>
+                    <span class="stage-meta" id="meta-CLOSED_WON">0 · $0</span>
+                  </div>
+                  <div class="kanban-cards" id="cards-CLOSED_WON"></div>
+                </div>
+
+                <div class="kanban-column kanban-column-terminal" data-stage="CLOSED_LOST">
+                  <div class="kanban-column-header">
+                    <span class="stage-name">🚫 LOST</span>
+                    <span class="stage-meta" id="meta-CLOSED_LOST">0 · $0</span>
+                  </div>
+                  <div class="kanban-cards" id="cards-CLOSED_LOST"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </section>
+
     </div>
 
     <nav class="mobile-nav" aria-label="Mobile app sections" role="tablist">
@@ -534,6 +629,9 @@
       <button class="nav-item" type="button" role="tab" data-view="route" aria-selected="false" aria-controls="view-route">
         <span class="nav-icon" aria-hidden="true">🗺️</span><span class="nav-label">Route</span>
       </button>
+      <button class="nav-item" type="button" role="tab" data-view="pipeline" aria-selected="false" aria-controls="view-pipeline">
+        <span class="nav-icon" aria-hidden="true">📊</span><span class="nav-label">Pipeline</span>
+      </button>
       <button class="nav-item" type="button" role="tab" data-view="data-management" aria-selected="false" aria-controls="view-data-management">
         <span class="nav-icon" aria-hidden="true">🗄️</span><span class="nav-label">Data</span>
       </button>
@@ -542,6 +640,25 @@
       </button>
     </nav>
   </div>
+
+  <!-- Snooze Date Modal -->
+  <dialog id="snoozeDialog" class="app-dialog">
+    <form method="dialog" id="snoozeForm">
+      <div class="dialog-content">
+        <h3>⏰ Snooze Account</h3>
+        <p id="snoozeCompanyName" class="dialog-subtitle">Select when to re-engage:</p>
+        <div class="form-group">
+          <label for="snoozeUntilDate">Follow-up Date</label>
+          <input type="date" id="snoozeUntilDate" required>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-secondary" id="btnCancelSnooze">Cancel</button>
+          <button type="button" class="btn btn-secondary" id="btnUnSnooze">Clear Snooze</button>
+          <button type="submit" class="btn btn-primary" id="btnConfirmSnooze">Save Snooze</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
 
   <div id="toast-container" role="status" aria-live="polite"></div>
 

@@ -9,10 +9,11 @@
  * native ES modules served straight from ./public.
  */
 
-import { initViewSwitcher, activateView, isDesktop, apiFetch, apiPost } from './ui.js';
+import { initViewSwitcher, activateView, onViewOpen, isDesktop, apiFetch, apiPost } from './ui.js';
 import { initStore, initConnectivityWatch, onSynced } from './store.js';
 import { initFieldView } from './field.js';
 import { initDesktopViews, refreshActiveDesktopView } from './desktop.js';
+import { initPipelineView, fetchPipelineData } from './pipeline.js';
 
 export { apiFetch, apiPost };
 
@@ -28,6 +29,7 @@ initConnectivityWatch();
 initViewSwitcher();
 initFieldView();
 initDesktopViews();
+onViewOpen('pipeline', initPipelineView);
 
 // Land on the field log on every device. On mobile the sidebar is hidden by
 // CSS, so this is the only reachable view.
@@ -36,4 +38,5 @@ activateView('field');
 // A queue drain can change what the active tables should show.
 onSynced(() => {
   refreshActiveDesktopView();
+  fetchPipelineData();
 });

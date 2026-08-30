@@ -480,7 +480,7 @@ function renderObjections(rawObjections) {
   }
 }
 
-function applyCompany(company) {
+export function applyCompany(company) {
   state.selectedCompanyId = company.company_id;
   state.selectedCompany = company;
   $('companyInput').value = company.company_name || '';

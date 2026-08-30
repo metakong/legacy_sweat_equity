@@ -1992,5 +1992,352 @@ input[type="checkbox"] {
   }
 }
 
+/* =====================================================================
+   5. PIPELINE CRM — ACTION QUEUE & KANBAN BOARD
+   ===================================================================== */
+
+.pipeline-mobile-view {
+  display: block;
+}
+
+.pipeline-desktop-view {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .pipeline-mobile-view {
+    display: none;
+  }
+  .pipeline-desktop-view {
+    display: block;
+  }
+}
+
+/* ── Segmented Control Filter ──────────────────────────────── */
+.segmented-control {
+  display: flex;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  margin-bottom: 1.25rem;
+  gap: 4px;
+}
+
+.segment-btn {
+  flex: 1;
+  min-height: 44px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  border-radius: calc(var(--radius-sm) - 2px);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  touch-action: manipulation;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+}
+
+.segment-btn.active {
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(77, 138, 240, 0.35);
+}
+
+/* ── Action Card (Mobile Action Queue) ──────────────────────── */
+.action-card {
+  background: var(--bg-card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  margin-bottom: 0.85rem;
+  padding: 1rem;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  border-left: 5px solid var(--accent);
+}
+
+.action-card.urgency-overdue {
+  border-left-color: var(--danger, #e05252);
+}
+
+.action-card.urgency-today {
+  border-left-color: var(--warning, #e6a23c);
+}
+
+.action-card.urgency-upcoming {
+  border-left-color: var(--accent, #4d8af0);
+}
+
+.action-card.urgency-idle {
+  border-left-color: rgba(255, 255, 255, 0.25);
+}
+
+.action-card.stage-won {
+  border-left-color: #48bb78;
+}
+
+.action-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.action-card-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.action-card-stage-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.action-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.85rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 0.65rem;
+}
+
+.action-card-next-action {
+  background: rgba(77, 138, 240, 0.08);
+  border: 1px solid rgba(77, 138, 240, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.85rem;
+  font-size: 0.85rem;
+  color: var(--text-main);
+}
+
+.action-card-next-action strong {
+  color: var(--accent);
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.2rem;
+}
+
+.action-card-forecast {
+  font-weight: 700;
+  color: #48bb78;
+}
+
+.action-card-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.action-card-btn {
+  flex: 1;
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--card-border);
+  color: var(--text-main);
+  touch-action: manipulation;
+  transition: all 0.15s ease;
+  text-decoration: none;
+}
+
+.action-card-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.action-card-btn.btn-log {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.action-card-btn.btn-log:hover {
+  background: #3a75d8;
+}
+
+/* ── Desktop Kanban Board ────────────────────────────────── */
+.kanban-board {
+  display: flex;
+  gap: 1rem;
+  overflow-x: auto;
+  padding-bottom: 1.5rem;
+  min-height: 560px;
+  align-items: flex-start;
+}
+
+.kanban-column {
+  flex: 0 0 270px;
+  min-width: 270px;
+  background: rgba(18, 22, 34, 0.6);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 220px);
+}
+
+.kanban-column-terminal {
+  background: rgba(12, 15, 24, 0.4);
+  opacity: 0.92;
+}
+
+.kanban-column-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--card-border);
+  margin-bottom: 0.75rem;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.kanban-column-header .stage-name {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-main);
+}
+
+.kanban-column-header .stage-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.kanban-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+  flex: 1;
+  padding-right: 2px;
+}
+
+.kanban-card {
+  background: var(--bg-card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  border-left: 4px solid var(--accent);
+}
+
+.kanban-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.kanban-card-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 0.35rem;
+}
+
+.kanban-card-sub {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.kanban-card-action-text {
+  font-size: 0.78rem;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+  color: var(--text-main);
+  border-left: 2px solid var(--accent);
+}
+
+.kanban-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.kanban-card-stage-select {
+  font-size: 0.74rem;
+  padding: 0.25rem 0.4rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--card-border);
+  color: var(--text-main);
+  border-radius: 4px;
+  max-width: 110px;
+}
+
+.pipeline-summary-badge {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #48bb78;
+  background: rgba(72, 187, 120, 0.1);
+  border: 1px solid rgba(72, 187, 120, 0.3);
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+}
+
+/* ── App Dialog (Snooze Modal) ────────────────────────────── */
+.app-dialog {
+  background: var(--bg-elevated, #161b2a);
+  border: 1px solid var(--card-border-strong, rgba(255, 255, 255, 0.15));
+  border-radius: var(--radius-md, 12px);
+  color: var(--text-main, #ffffff);
+  padding: 1.5rem;
+  max-width: 420px;
+  width: 90vw;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.8);
+  margin: auto;
+}
+
+.app-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+}
+
+.dialog-content h3 {
+  margin-top: 0;
+  margin-bottom: 0.4rem;
+}
+
+.dialog-subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 1rem;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+
 
 
