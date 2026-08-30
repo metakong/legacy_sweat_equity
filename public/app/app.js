@@ -31,7 +31,7 @@ initDesktopViews();
 // CSS, so this is the only reachable view.
 activateView('field');
 
-// A queue drain can change what the desktop tables should show.
+// A queue drain can change what the active tables should show.
 onSynced(() => {
-  if (isDesktop()) refreshActiveDesktopView();
+  refreshActiveDesktopView();
 });

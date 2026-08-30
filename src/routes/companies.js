@@ -109,6 +109,7 @@ companies.get('/', async (c) => {
            (SELECT MAX(a.timestamp) FROM activity_logs a WHERE a.company_id = co.company_id) AS last_touched,
            (SELECT a.disposition FROM activity_logs a WHERE a.company_id = co.company_id ORDER BY a.timestamp DESC LIMIT 1) AS latest_disposition,
            (SELECT json_extract(a.ai_structured_notes, '$.next_action') FROM activity_logs a WHERE a.company_id = co.company_id AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_next_action,
+           (SELECT json_extract(a.ai_structured_notes, '$.product_interests') FROM activity_logs a WHERE a.company_id = co.company_id AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_product_interests,
            CASE
              WHEN (
                SELECT a.disposition FROM activity_logs a
@@ -203,6 +204,81 @@ companies.get('/:id', async (c) => {
     { 'Cache-Control': 'no-store' }
   );
 });
+
+/**
+ * Shared import handler for batched company + contact ingestion with auto-geocoding.
+ */
+export async function handleImport(c) {
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Malformed JSON body' }, 400);
+  }
+
+  const rawCompanies = Array.isArray(body?.companies) ? body.companies.slice(0, 50) : [];
+  if (rawCompanies.length === 0) {
+    return c.json({ error: 'No companies to import' }, 400);
+  }
+
+  let imported = 0;
+  let geocoded = 0;
+  let contactCount = 0;
+  const skipped = [];
+
+  for (const raw of rawCompanies) {
+    try {
+      // Auto-geocode if address is present and coordinates are missing
+      if ((!raw?.lat || !raw?.long) && raw?.street_1) {
+        const fullAddress = [raw.street_1, raw.city || 'Springfield', raw.state || 'MO', raw.zip_code]
+          .filter(Boolean)
+          .join(', ');
+        const coords = await geocodeAddress(c.env, fullAddress);
+        if (coords) {
+          raw.lat = coords.lat;
+          raw.long = coords.long;
+          geocoded += 1;
+        }
+      }
+
+      const company = normalizeCompany(raw);
+      await upsertCompany(c.env.DB, company);
+      imported += 1;
+
+      // Insert nested contacts
+      const rawContacts = Array.isArray(raw?.contacts) ? raw.contacts.slice(0, 20) : [];
+      for (const rawContact of rawContacts) {
+        const contact = normalizeContact(rawContact, company.company_id);
+        if (contact) {
+          await upsertContact(c.env.DB, contact);
+          contactCount += 1;
+        }
+      }
+    } catch (err) {
+      skipped.push({
+        company_name: raw?.company_name || '(unknown)',
+        reason: err instanceof ValidationError ? err.message : 'Unexpected error'
+      });
+    }
+  }
+
+  return c.json({
+    success: true,
+    imported,
+    contacts: contactCount,
+    geocoded,
+    skipped
+  });
+}
+
+/**
+ * POST /api/companies/import — batched company + contact ingestion for the D365 importer.
+ */
+companies.post('/import', handleImport);
+
+/** Mounted separately at /api/import. */
+export const importRouter = new Hono();
+importRouter.post('/', handleImport);
 
 export default companies;
 

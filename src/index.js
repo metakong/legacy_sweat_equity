@@ -28,7 +28,7 @@ import {
 } from './lib/security.js';
 import { businessDate, businessDayRangeUtc } from './lib/time.js';
 
-import companiesRouter, { contacts as contactsRouter, enums as enumsRouter } from './routes/companies.js';
+import companiesRouter, { contacts as contactsRouter, enums as enumsRouter, importRouter } from './routes/companies.js';
 import activityRouter, { root as activityRootRouter, audio as audioRouter } from './routes/activity.js';
 import enrichRouter from './routes/enrich.js';
 import eodRouter from './routes/eod.js';
@@ -87,6 +87,7 @@ app.use('*', async (c, next) => {
 // API ROUTES
 // ---------------------------------------------------------------------
 app.route('/api/companies', companiesRouter);
+app.route('/api/import', importRouter);
 app.route('/api/contacts', contactsRouter);
 app.route('/api/enums', enumsRouter);
 app.route('/api/enrich', enrichRouter);

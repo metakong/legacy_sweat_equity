@@ -789,6 +789,76 @@ input[type="checkbox"] {
 
 .tier-card .btn-primary { margin-top: auto; }
 
+/* ── D365 Import Panel ───────────────────────────── */
+.import-panel { margin-top: 1.5rem; }
+
+.import-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.import-controls input[type="file"] {
+  flex: 1;
+  min-width: 0;
+  padding: 0.75rem;
+  background: var(--bg-inset);
+  border: 1px solid var(--card-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  font-size: 0.875rem;
+  min-height: var(--touch-target);
+}
+
+.import-controls input[type="file"]::file-selector-button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-right: 0.75rem;
+}
+
+.import-progress {
+  margin-top: 1rem;
+}
+
+.import-progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--bg-inset);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.import-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.import-status {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.import-stats {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--bg-inset);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-main);
+}
+
 /* ── EOD AI Debrief ───────────────────────────────── */
 .eod-metrics {
   display: grid;
@@ -1259,4 +1329,82 @@ input[type="checkbox"] {
   font-weight: 500;
   cursor: pointer;
 }
+
+/* ── Product Interest Tags ────────────────────────────────── */
+.product-tag-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.product-tag {
+  background: #1e293b;
+  color: #38bdf8;
+  border: 1px solid #0284c7;
+  padding: 0.15rem 0.6rem;
+  border-radius: 99px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+/* ── Mobile Bottom Navigation Bar (100% Feature Parity) ── */
+@media (min-width: 1024px) {
+  .mobile-nav {
+    display: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  .mobile-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 9000;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    background: #0a0d14;
+    border-top: 1px solid #1f2937;
+    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(56px + env(safe-area-inset-bottom));
+  }
+
+  .mobile-nav .nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 0;
+    flex: 1;
+    color: #9ca3af;
+    background: none;
+    border: none;
+    font-size: 0.65rem;
+    font-weight: 600;
+    gap: 0.2rem;
+    cursor: pointer;
+    transition: color 0.15s ease;
+  }
+
+  .mobile-nav .nav-item .nav-icon {
+    font-size: 1.15rem;
+    line-height: 1;
+  }
+
+  .mobile-nav .nav-item.active {
+    color: #38bdf8;
+  }
+
+  .sticky-bottom-action {
+    bottom: calc(56px + env(safe-area-inset-bottom));
+  }
+
+  .app-container {
+    padding-bottom: calc(140px + env(safe-area-inset-bottom));
+  }
+}
+
+
 

@@ -8,6 +8,93 @@
 
 ---
 
+## 2026-08-30 11:15 CDT — D365 Deduplication Importer & Mapbox Route Planner Audit (Agent: Antigravity)
+
+### Session Goal
+Build a native D365 Excel/CSV importer in the desktop UI enforcing strict deduplication by Business Name, implement a batched backend ingestion endpoint with auto-geocoding, audit Mapbox routing integration, and push to both GitHub and Cloudflare.
+
+### Phase 1 — Frontend Deduplication Importer UI
+- Added `📥 Import D365 Leads` panel in `#view-tier23` section of `public/app/index.html`.
+- Added `#importFileInput`, `#uploadLeadsBtn`, `#importProgress`, `#importProgressFill`, and `#importStats`.
+- Styled import elements in `public/app/app.css` matching the Samsung One UI OLED dark design system.
+
+### Phase 2 — Deduplication Logic & File Parsing
+- Implemented `parseAndDeduplicate(file)` in `public/app/desktop.js` using lazy-loaded SheetJS (`XLSX`).
+- Deduplicated rows by canonical `Business Name` (`toUpperCase().trim()`), grouping multiple contact rows under single parent company records.
+- Mapped Dynamics 365 Open Leads columns (`(Do Not Modify) Lead`, `(Do Not Modify) Row Checksum`, `(Do Not Modify) Modified On`, `Business Name`, `Street 1`, `Street 2`, `City`, `State`, `Zip Code`, `Lead Source`, `Rating`, `Employees`, `Industry`, `First Name`, `Last Name`, `Phone Number`, `Email Address`, `Job Title`, `SIC Code`) to internal schema fields.
+- Implemented `uploadInChunks(companies, 25)` delivering batched ingestion with real-time UI progress updates and stats summary.
+
+### Phase 3 & 4 — Backend Ingestion & Mapbox Audit
+- Added `POST /api/import` and `POST /api/companies/import` in `src/routes/companies.js` and `src/index.js` for batched ingestion with auto-geocoding via Mapbox Geocoding API (`geocodeAddress`).
+- Audited `src/routes/routing.js`: confirmed code properly uses `c.env.MAPBOX_TOKEN`, correct `lon,lat` coordinate format, and null-coordinate safety filtering.
+- Expanded test suite in `test/worker.test.js` covering company and contact import normalization (91 tests passing).
+
+### Phase 5 — Dual Synchronization (Git + Cloudflare)
+- Verified all 91 automated unit tests pass.
+- Pushed changes to GitHub repository (`origin/main`).
+- Deployed Worker and static assets to Cloudflare (`npm run deploy`).
+
+---
+
+## 2026-08-29 17:05 CDT — Native Mobile Bottom Navigation Bar (100% Mobile Feature Parity) (Agent: Antigravity)
+
+### Session Goal
+Implement a native-style fixed bottom navigation bar on mobile viewports (<1024px), unlocking 100% feature parity across all 5 app views (Field Log, Route Planner, Tier 1 Handoff, Tier 2/3 Sync, EOD AI Debrief) on smartphones.
+
+### Phase 1 — Mobile Navigation HTML Structure
+- Injected `<nav class="mobile-nav" role="tablist">` inside `.app-shell` in `public/app/index.html`.
+- Included navigation items for Field (`📍`), Route (`🗺️`), Tier 1 (`📋`), Sync (`📤`), and EOD (`🌙`).
+
+### Phase 2 — Responsive CSS Architecture
+- Added `.mobile-nav` styling in `public/app/app.css`:
+  - Desktop (`@media (min-width: 1024px)`): hidden (`display: none`).
+  - Mobile (`@media (max-width: 1023px)`): fixed bottom bar (`position: fixed; bottom: 0; z-index: 9000`) with safe-area padding, flex distribution, and active highlight color (`#38bdf8`).
+  - Shifted `.sticky-bottom-action` (Log Activity button) above the navigation bar (`bottom: calc(56px + env(safe-area-inset-bottom))`).
+  - Increased `.app-container` mobile bottom padding to `calc(140px + env(safe-area-inset-bottom))` to prevent panel overlap.
+
+### Phase 3 — JavaScript View-Switching Wiring
+- Verified `activateView()` and `initViewSwitcher()` in `public/app/ui.js` query all `.nav-item` elements, seamlessly synchronizing `active` classes and `aria-selected` attributes across both the desktop sidebar and mobile bottom nav.
+- Updated `app.js` to refresh active view on queue sync on all devices.
+
+### Phase 4 — CLI Execution & Deployment
+- Ran `npm test` — all 90 zero-dependency unit tests passing.
+- Deployed Worker and static assets to Cloudflare (`npm run deploy`, Version ID: `7d763190-a506-4633-b0cb-0bd295f2120e`).
+- Verified live site serves the mobile navigation bar and API endpoints operate correctly.
+
+---
+
+## 2026-08-29 16:10 CDT — Aflac Product-Line Extraction & Target Dossier Tags (Agent: Antigravity)
+
+### Session Goal
+Implement Aflac core product extraction from ambient voice notes and live walk-in transcripts, expand the companies backend query to surface latest product interests, render responsive product interest tags on the Target Account dossier, integrate product trends into EOD debriefs, and deploy live to Cloudflare.
+
+### Phase 1 — AI Prompt Modification
+- Added `AFLAC_PRODUCTS` (`Accident`, `Cancer`, `Critical Illness`, `Hospital Indemnity`, `Short-Term Disability`, `Life`, `Dental/Vision`) to `src/routes/activity.js`.
+- Added `"product_interests"` to the JSON schema in `buildStructuringPrompt`.
+- Added strict decision-maker engagement tagging rule: `- Tag a product in 'product_interests' only if the decision maker explicitly asked a question about it or showed positive reception. Do not tag products you merely pitched without engagement.`
+- Maintained PHI compliance guardrail (`CRITICAL B2B COMPLIANCE: You must actively redact...`) verbatim.
+- Validated and stored filtered `product_interests` inside `ai_structured_notes` via `structureTranscript()`.
+
+### Phase 2 — Backend Query Expansion
+- Updated `GET /api/companies` in `src/routes/companies.js` with subquery column `latest_product_interests`:
+  `(SELECT json_extract(a.ai_structured_notes, '$.product_interests') FROM activity_logs a WHERE a.company_id = co.company_id AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_product_interests`.
+
+### Phase 3 — Target Dossier UI Rendering
+- Added `.product-tag-container` and `.product-tag` pill badge styling in `public/app/app.css`.
+- Added `#productTagContainer` inside `#dossierPanel` in `public/app/index.html`.
+- Added `renderProductInterests()` in `public/app/field.js` to parse and render dynamic product pills in the Target Account dossier upon selection (`applyCompany`), pre-call scan (`renderDossier`), and reset (`clearCompanySelection`).
+
+### Phase 4 — EOD Debrief Integration
+- Updated `SYSTEM_PROMPT` in `src/routes/eod.js` with required Section 4: `4. 📈 Territory Product Trends: A brief analysis of which specific Aflac product lines generated the most interest today across the territory.`
+- Updated `describeActivity` to pass `product_interests` into the daily debrief context.
+
+### Phase 5 — CLI Execution & Deployment
+- Ran `npm test` — all 90 zero-dependency unit tests passing.
+- Deployed Worker and frontend assets to Cloudflare (`npm run deploy`, Version ID: `59c68dc2-827a-4dbd-949d-6af5af785bcb`).
+- Verified live: `/api/health` ok, `/api/companies` returns `latest_product_interests`.
+
+---
+
 ## 2026-08-29 15:35 CDT — Ambient Sales Coaching & Real-Time Gamification Scoreboard (Agent: Antigravity)
 
 ### Session Goal

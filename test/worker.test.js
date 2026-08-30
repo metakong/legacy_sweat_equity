@@ -461,3 +461,39 @@ test('calculateRenewalDate projects exactly one year into the future', () => {
   assert.equal(calculateRenewalDate(null, '2026-09-15'), '2027-09-15');
 });
 
+// ---------------------------------------------------------------------
+// D365 Import & Deduplication
+// ---------------------------------------------------------------------
+test('imported company normalizes with contacts array structure', () => {
+  const raw = {
+    company_name: 'Ozark Technical College',
+    street_1: '1001 E Chestnut Expy',
+    city: 'Springfield',
+    state: 'MO',
+    zip_code: '65802',
+    rating: 'Hot',
+    employees: 450,
+    d365_lead_id: 'LEAD-9988'
+  };
+
+  const normalized = normalizeCompany(raw);
+  assert.equal(normalized.company_name, 'Ozark Technical College');
+  assert.equal(normalized.street_1, '1001 E Chestnut Expy');
+  assert.equal(normalized.city, 'Springfield');
+  assert.equal(normalized.state, 'MO');
+  assert.equal(normalized.zip_code, '65802');
+  assert.equal(normalized.rating, 'Hot');
+  assert.equal(normalized.employees, 450);
+  assert.equal(normalized.d365_lead_id, 'LEAD-9988');
+
+  const contact1 = normalizeContact({ first_name: 'Hal', last_name: 'Higdon', job_title: 'Director' }, normalized.company_id);
+  const contact2 = normalizeContact({ first_name: 'Sara', last_name: 'Connor', job_title: 'Benefits Manager' }, normalized.company_id);
+
+  assert.ok(contact1);
+  assert.ok(contact2);
+  assert.equal(contact1.company_id, normalized.company_id);
+  assert.equal(contact2.company_id, normalized.company_id);
+  assert.equal(contact1.first_name, 'Hal');
+  assert.equal(contact2.first_name, 'Sara');
+});
+

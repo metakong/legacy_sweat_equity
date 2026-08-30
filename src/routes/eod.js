@@ -26,10 +26,11 @@ import { cleanCapped, parseJsonLoose } from '../lib/validate.js';
 const eod = new Hono();
 
 const SYSTEM_PROMPT = 'You are an elite B2B sales manager. Read the canvasser\'s daily log. '
-  + 'Return a Markdown report with three sections: 1. A metrics table (Total Doors, DMs Met, '
+  + 'Return a Markdown report with four sections: 1. A metrics table (Total Doors, DMs Met, '
   + 'Appointments). 2. A narrative summary highlighting the most valuable interactions and '
   + 'recommended next steps based on the voice notes. 3. 🎙️ Sales Coaching & Execution: A synthesized '
-  + 'analysis of the agent\'s pitch delivery, objection handling, and areas for improvement based on the day\'s coaching feedback.';
+  + 'analysis of the agent\'s pitch delivery, objection handling, and areas for improvement based on the day\'s coaching feedback. '
+  + '4. 📈 Territory Product Trends: A brief analysis of which specific Aflac product lines generated the most interest today across the territory.';
 
 /**
  * Appended to the system prompt. The model controls prose, not facts: the
@@ -98,6 +99,7 @@ function describeActivity(row) {
     next_action_date: notes.next_action_date || null,
     key_facts: notes.key_facts?.length ? notes.key_facts : null,
     coaching_feedback: notes.coaching_feedback || null,
+    product_interests: notes.product_interests?.length ? notes.product_interests : null,
     // Only when the structuring pass produced nothing usable — otherwise the
     // full transcript just burns context the summary already covers.
     transcript: notes.summary ? null : cleanCapped(row.raw_audio_transcription, 600, { allowNewlines: true })

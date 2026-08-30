@@ -74,6 +74,16 @@ const extensionFor = (mimeType) => {
 // LLM STRUCTURING PASS
 // ---------------------------------------------------------------------
 
+export const AFLAC_PRODUCTS = [
+  'Accident',
+  'Cancer',
+  'Critical Illness',
+  'Hospital Indemnity',
+  'Short-Term Disability',
+  'Life',
+  'Dental/Vision'
+];
+
 /**
  * The system prompt is written as a hard contract because its output is
  * inserted into a CRM. Enum values are restated verbatim, and the model is
@@ -97,7 +107,8 @@ Return ONLY a JSON object with exactly these keys:
   "next_action": string (imperative, one line) or null,
   "next_action_date": "YYYY-MM-DD" or null,
   "key_facts": array of short strings (max 5, [] if none),
-  "coaching_feedback": "string (1-2 sentences of direct, actionable critique on the agent's pitch, tone, or objection handling if a live conversation was recorded. Emit null if it was just a dictated note) or null"
+  "coaching_feedback": "string (1-2 sentences of direct, actionable critique on the agent's pitch, tone, or objection handling if a live conversation was recorded. Emit null if it was just a dictated note) or null",
+  "product_interests": "array of strings (only pick from: 'Accident', 'Cancer', 'Critical Illness', 'Hospital Indemnity', 'Short-Term Disability', 'Life', 'Dental/Vision') or []"
 }
 
 Rules:
@@ -105,6 +116,7 @@ Rules:
 - Rating guide: "Hot" = decision maker engaged and a date is set; "Warm" = decision maker interested, no date; "Cold" = no decision-maker traction.
 - Emit null for anything not clearly stated. Do not infer premium, headcount, or names.
 - "projected_ap" is annualized premium. If a monthly figure is spoken, multiply by 12.
+- Tag a product in 'product_interests' only if the decision maker explicitly asked a question about it or showed positive reception. Do not tag products you merely pitched without engagement.
 - CRITICAL B2B COMPLIANCE: You must actively redact, remove, and ignore any mention of specific medical conditions, health data, or individual employee names (other than the primary B2B Decision Maker). Replace any such instances with [REDACTED - PHI].
 - Never include commentary, markdown, or code fences. JSON only.`;
 
@@ -150,7 +162,10 @@ async function structureTranscript(env, transcript, booleans) {
       next_action: cleanCapped(parsed.next_action, 300),
       next_action_date: asIsoDate(parsed.next_action_date),
       key_facts: asShortList(parsed.key_facts, 5),
-      coaching_feedback: cleanCapped(parsed.coaching_feedback, 1000)
+      coaching_feedback: cleanCapped(parsed.coaching_feedback, 1000),
+      product_interests: Array.isArray(parsed.product_interests)
+        ? parsed.product_interests.filter((p) => AFLAC_PRODUCTS.includes(p))
+        : []
     }
   };
 }

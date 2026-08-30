@@ -503,6 +503,40 @@ function initTier23Tab() {
       showToast(err.message, 'error');
     }
   });
+
+  // ----- D365 Lead Importer -----
+  const fileInput = $('importFileInput');
+  const uploadBtn = $('uploadLeadsBtn');
+
+  if (fileInput && uploadBtn) {
+    fileInput.addEventListener('change', () => {
+      uploadBtn.disabled = !fileInput.files?.length;
+    });
+
+    uploadBtn.addEventListener('click', async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      setButtonBusy(uploadBtn, true, 'Reading…');
+      try {
+        const deduplicated = await parseAndDeduplicate(file);
+        if (deduplicated.length === 0) {
+          showToast('No valid companies found in the file.', 'error');
+          return;
+        }
+        showToast(`Parsed ${deduplicated.length} unique companies. Uploading…`, 'info');
+        await uploadInChunks(deduplicated, 25);
+        // Refresh the route planner and export views with the new data
+        await loadTargets();
+        await loadExports();
+      } catch (err) {
+        showToast(`Import failed: ${err.message}`, 'error');
+      } finally {
+        setButtonBusy(uploadBtn, false);
+        fileInput.value = '';
+        uploadBtn.disabled = true;
+      }
+    });
+  }
 }
 
 async function markExported(rows, status) {
@@ -515,6 +549,190 @@ async function markExported(rows, status) {
     console.error('Could not update sync tier:', err);
     showToast(`File downloaded, but tier status did not update: ${err.message}`, 'info');
   }
+}
+
+// =====================================================================
+// D365 IMPORT — PARSE, DEDUPLICATE, UPLOAD
+// =====================================================================
+
+/**
+ * D365 column header → internal field mapping.
+ * Only the columns we actually use for company + contact ingestion.
+ */
+const D365_IMPORT_MAP = {
+  '(Do Not Modify) Lead':   'd365_lead_id',
+  '(Do Not Modify) Row Checksum': 'd365_checksum',
+  '(Do Not Modify) Modified On':  'd365_modified_on',
+  'Business Name':          'company_name',
+  'Street 1':               'street_1',
+  'Street 2':               'street_2',
+  'City':                   'city',
+  'State':                  'state',
+  'Zip Code':               'zip_code',
+  'Lead Source':             'lead_source',
+  'Rating':                 'rating',
+  'Employees':              'employees',
+  'Industry':               'industry',
+  'First Name':             'first_name',
+  'Last Name':              'last_name',
+  'Phone Number':           'phone_number',
+  'Email Address':          'email_address',
+  'Job Title':              'job_title',
+  'SIC Code':               'sic_code'
+};
+
+/** Contact-level fields — extracted from each row and nested under the company. */
+const CONTACT_FIELDS = new Set(['first_name', 'last_name', 'phone_number', 'email_address', 'job_title']);
+
+/**
+ * Read a .xlsx or .csv file with SheetJS, map D365 column headers to internal
+ * field names, then deduplicate rows by Business Name (uppercased/trimmed).
+ * Returns an array of { company fields, contacts: [{ contact fields }] }.
+ */
+async function parseAndDeduplicate(file) {
+  const { loadSheetJs } = await import('./d365.js');
+  const XLSX = await loadSheetJs();
+
+  const data = await file.arrayBuffer();
+  const workbook = XLSX.read(data, { type: 'array' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+  if (rows.length === 0) return [];
+
+  // Build a header map from the actual file headers to our internal fields.
+  // This handles the case where a D365 export might have slightly different
+  // header casing or extra whitespace.
+  const sampleHeaders = Object.keys(rows[0]);
+  const headerMap = {};
+  for (const header of sampleHeaders) {
+    const trimmed = header.trim();
+    if (D365_IMPORT_MAP[trimmed]) {
+      headerMap[header] = D365_IMPORT_MAP[trimmed];
+    }
+  }
+
+  // Deduplicate by Business Name — multiple D365 rows for the same company
+  // (different contacts) are merged into one company with nested contacts.
+  const companyMap = new Map();
+
+  for (const row of rows) {
+    const mapped = {};
+    for (const [originalHeader, internalField] of Object.entries(headerMap)) {
+      const val = row[originalHeader];
+      if (val !== undefined && val !== null && String(val).trim() !== '') {
+        mapped[internalField] = String(val).trim();
+      }
+    }
+
+    const companyName = mapped.company_name;
+    if (!companyName) continue;
+
+    const key = companyName.toUpperCase().trim();
+
+    if (!companyMap.has(key)) {
+      // First occurrence — extract company-level fields
+      const company = {};
+      for (const [field, value] of Object.entries(mapped)) {
+        if (!CONTACT_FIELDS.has(field)) {
+          company[field] = value;
+        }
+      }
+      company.contacts = [];
+      companyMap.set(key, company);
+    }
+
+    // Extract contact-level fields from every row (even duplicates)
+    const contact = {};
+    let hasContactInfo = false;
+    for (const field of CONTACT_FIELDS) {
+      if (mapped[field]) {
+        contact[field] = mapped[field];
+        hasContactInfo = true;
+      }
+    }
+    if (hasContactInfo) {
+      companyMap.get(key).contacts.push(contact);
+    }
+  }
+
+  return [...companyMap.values()];
+}
+
+/**
+ * Upload deduplicated companies in batches of `chunkSize` to POST /api/import.
+ * Updates the progress bar and status text after each chunk.
+ */
+async function uploadInChunks(companies, chunkSize) {
+  const progress = $('importProgress');
+  const fill = $('importProgressFill');
+  const status = $('importStatus');
+  const stats = $('importStats');
+
+  progress.hidden = false;
+  stats.hidden = true;
+  fill.style.width = '0%';
+
+  let totalImported = 0;
+  let totalContacts = 0;
+  let totalGeocoded = 0;
+  const allSkipped = [];
+  const totalChunks = Math.ceil(companies.length / chunkSize);
+
+  for (let i = 0; i < companies.length; i += chunkSize) {
+    const chunk = companies.slice(i, i + chunkSize);
+    const chunkIndex = Math.floor(i / chunkSize) + 1;
+
+    status.textContent = `Uploading batch ${chunkIndex} of ${totalChunks}…`;
+    fill.style.width = `${Math.round((chunkIndex / totalChunks) * 100)}%`;
+
+    try {
+      const result = await apiPost('/api/companies/import', { companies: chunk });
+      totalImported += result.imported || 0;
+      totalContacts += result.contacts || 0;
+      totalGeocoded += result.geocoded || 0;
+      if (result.skipped?.length) allSkipped.push(...result.skipped);
+    } catch (err) {
+      showToast(`Batch ${chunkIndex} failed: ${err.message}`, 'error');
+    }
+  }
+
+  fill.style.width = '100%';
+  status.textContent = 'Import complete.';
+
+  // Show summary stats
+  const lines = [
+    `✅ <strong>${totalImported}</strong> companies imported`,
+    `👤 <strong>${totalContacts}</strong> contacts attached`,
+    `📍 <strong>${totalGeocoded}</strong> addresses geocoded`
+  ];
+  if (allSkipped.length > 0) {
+    lines.push(`⚠️ <strong>${allSkipped.length}</strong> skipped: ${allSkipped.map((s) => s.company_name).join(', ')}`);
+  }
+
+  // Build DOM safely — no innerHTML
+  stats.replaceChildren();
+  for (const line of lines) {
+    const p = document.createElement('p');
+    // Parse the simple <strong> tags safely
+    const parts = line.split(/<\/?strong>/);
+    for (let j = 0; j < parts.length; j++) {
+      if (j % 2 === 1) {
+        const strong = document.createElement('strong');
+        strong.textContent = parts[j];
+        p.appendChild(strong);
+      } else {
+        p.appendChild(document.createTextNode(parts[j]));
+      }
+    }
+    stats.appendChild(p);
+  }
+  stats.hidden = false;
+
+  showToast(
+    `Import complete: ${totalImported} companies, ${totalContacts} contacts, ${totalGeocoded} geocoded.`,
+    'success'
+  );
 }
 
 // =====================================================================

@@ -230,6 +230,35 @@ function showNextActionCallout(nextActionText) {
   }
 }
 
+function renderProductInterests(rawInterests) {
+  const container = $('productTagContainer');
+  if (!container) return;
+
+  let interests = [];
+  if (Array.isArray(rawInterests)) {
+    interests = rawInterests;
+  } else if (typeof rawInterests === 'string' && rawInterests.trim()) {
+    try {
+      const parsed = JSON.parse(rawInterests);
+      if (Array.isArray(parsed)) interests = parsed;
+    } catch {
+      /* ignore invalid JSON */
+    }
+  }
+
+  if (interests.length > 0) {
+    container.replaceChildren(...interests.map((prod) => el('span', {
+      className: 'product-tag',
+      text: prod
+    })));
+    container.hidden = false;
+    $('dossierPanel').hidden = false;
+  } else {
+    container.replaceChildren();
+    container.hidden = true;
+  }
+}
+
 function applyCompany(company) {
   state.selectedCompanyId = company.company_id;
   state.selectedCompany = company;
@@ -259,6 +288,13 @@ function applyCompany(company) {
   } else {
     showNextActionCallout(null);
   }
+
+  // Surface Product Interests if recorded
+  if (company.latest_product_interests) {
+    renderProductInterests(company.latest_product_interests);
+  } else {
+    renderProductInterests(null);
+  }
 }
 
 function clearCompanySelection() {
@@ -267,6 +303,7 @@ function clearCompanySelection() {
   $('companyMatchHint').textContent = 'New account — will be created on save.';
   $('companyMatchHint').className = 'field-hint';
   showNextActionCallout(null);
+  renderProductInterests(null);
 }
 
 function initCompanySearch() {
@@ -364,13 +401,17 @@ function initInspect() {
   });
 }
 
-function renderDossier({ bullets = [], sources = [], next_action, error }) {
+function renderDossier({ bullets = [], sources = [], next_action, product_interests, error }) {
   const panel = $('dossierPanel');
   const list = $('dossierList');
   panel.hidden = false;
 
   if (next_action) {
     showNextActionCallout(next_action);
+  }
+
+  if (product_interests) {
+    renderProductInterests(product_interests);
   }
 
   if (error) {

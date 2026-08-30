@@ -165,6 +165,7 @@
                 <div class="callout-header">⚡ <strong>AI Next Action</strong></div>
                 <p class="callout-body" id="nextActionText"></p>
               </div>
+              <div class="product-tag-container" id="productTagContainer" hidden></div>
               <h3>Pre-Call Dossier</h3>
               <ul class="dossier-list" id="dossierList"></ul>
               <details class="dossier-sources" id="dossierSources" hidden>
@@ -382,6 +383,30 @@
               </div>
             </div>
           </div>
+
+          <div class="panel import-panel">
+            <h2>📥 Import D365 Leads</h2>
+            <p class="field-hint">
+              Upload a D365 <strong>Open Leads</strong> export (<code>.xlsx</code> or <code>.csv</code>).
+              Rows are deduplicated by <strong>Business Name</strong> before ingestion — contacts
+              from duplicate rows are merged under one company record. Addresses are geocoded
+              automatically when a Mapbox token is available.
+            </p>
+            <div class="import-controls">
+              <input type="file" id="importFileInput" accept=".csv,.xlsx"
+                     aria-label="Select a D365 export file">
+              <button class="btn-primary" id="uploadLeadsBtn" type="button" disabled>
+                <span class="btn-text">Upload &amp; Deduplicate</span>
+              </button>
+            </div>
+            <div class="import-progress" id="importProgress" hidden>
+              <div class="import-progress-bar">
+                <div class="import-progress-fill" id="importProgressFill"></div>
+              </div>
+              <p class="import-status" id="importStatus">Preparing…</p>
+            </div>
+            <div class="import-stats" id="importStats" hidden aria-live="polite"></div>
+          </div>
         </main>
       </section>
 
@@ -418,6 +443,24 @@
       </section>
 
     </div>
+
+    <nav class="mobile-nav" aria-label="Mobile app sections" role="tablist">
+      <button class="nav-item active" type="button" role="tab" data-view="field" aria-selected="true" aria-controls="view-field">
+        <span class="nav-icon" aria-hidden="true">📍</span><span class="nav-label">Field</span>
+      </button>
+      <button class="nav-item" type="button" role="tab" data-view="route" aria-selected="false" aria-controls="view-route">
+        <span class="nav-icon" aria-hidden="true">🗺️</span><span class="nav-label">Route</span>
+      </button>
+      <button class="nav-item" type="button" role="tab" data-view="tier1" aria-selected="false" aria-controls="view-tier1">
+        <span class="nav-icon" aria-hidden="true">📋</span><span class="nav-label">Tier 1</span>
+      </button>
+      <button class="nav-item" type="button" role="tab" data-view="tier23" aria-selected="false" aria-controls="view-tier23">
+        <span class="nav-icon" aria-hidden="true">📤</span><span class="nav-label">Sync</span>
+      </button>
+      <button class="nav-item" type="button" role="tab" data-view="eod" aria-selected="false" aria-controls="view-eod">
+        <span class="nav-icon" aria-hidden="true">🌙</span><span class="nav-label">EOD</span>
+      </button>
+    </nav>
   </div>
 
   <div id="toast-container" role="status" aria-live="polite"></div>
