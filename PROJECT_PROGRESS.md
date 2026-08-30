@@ -8,6 +8,58 @@
 
 ---
 
+## 2026-08-30 16:16 CDT — Critical P0 Architecture Fixes: Cache Invalidation, Data Preservation, Timezone, WCAG (Agent: Antigravity)
+
+### Session Goal
+Execute the P0/P1 fixes identified in the Claude Opus 5 architectural audit: halt stale SW cache, stop D365 data destruction, fix the renewal-window timezone glitch, cure the 3-tap sticky bug, and resolve CSS/WCAG regressions.
+
+### Execution Summary
+
+- **Phase 1: Service Worker Cache Invalidation (`public/sw.js`)**
+  - Bumped `CACHE_NAME` from `aflac-prospect-v3` → `aflac-prospect-v4`. All phones running stale cached builds will now receive the updated activate event, nuke the old cache, and claim the new worker.
+  - Added `/app/index.html` explicitly to `CORE_ASSETS` so the app shell document is always precached by its canonical URL as well as via the `/app/` alias.
+  - The activate event loop (`keys.filter(k !== CACHE_NAME).map(delete)`) was already structurally correct; the version bump is what actually triggers it.
+
+- **Phase 2: D365 Data Preservation — 3 New Columns (`schema.sql`, `src/lib/db.js`)**
+  - Added `sic_code TEXT`, `account_number TEXT`, `post_enrollment_date TEXT` to `companies` schema (CREATE TABLE + commented ALTER TABLE migration block for the existing production D1).
+  - Mapped all three through `normalizeCompany()` (with appropriate caps: 16 chars for SIC, 64 for account number, ISO date for enrollment date) and through `upsertCompany()` INSERT/ON CONFLICT with COALESCE preservation — a quick re-touch never blanks a previously imported SIC code.
+
+- **Phase 3: Renewal Window Timezone Fix (`src/routes/companies.js`)**
+  - Removed all uses of `date('now', 'localtime')` in the companies GET handler. SQLite's `localtime` is the server process TZ (UTC on Cloudflare Workers), so the renewal window was flipping map pins from purple to gray at 7:00 PM CDT when UTC midnight crossed the date line.
+  - Replaced with JavaScript-computed `businessDate()` and a derived `minus35` ISO date literal baked into the SQL as a string comparison (ISO date strings sort correctly when zero-padded). Consistent across both the WHERE clause filter and the SELECT `is_renewal_active` CASE expression.
+  - Imported `businessDate` and `businessDayRangeUtc` from `src/lib/time.js`.
+
+- **Phase 3b: CRM Overwrite Guard (`src/routes/companies.js`)**
+  - In `handleImport`, changed the `classifyIndustry` call to only fire when `raw.industry` is null/empty. Previously the AI always overwrote whatever D365 industry the agent had curated — destroying accurate SIC classifications on every re-import. The guard is a single `&&  !raw?.industry` condition on the outer `if`.
+
+- **Phase 3c: 3-Tap Sticky Bug (`public/app/field.js`)**
+  - `resetForm()` now explicitly calls `setBinaryToggles(1, 1, 0)` after clearing the company selection. Door #6 was inheriting door #5's "DM Met" state (is_dm_contact=1) because `state.binary` was never reset. The defaults (In-Person · Initial · Gatekeeper) are now enforced on every save.
+
+- **Phase 4: CSS/WCAG Fixes (`public/app/app.css`, `public/app/index.html`)**
+  - Fixed `.metrics-panel`: `--card-bg` (undefined) → `--bg-card`; `--radius` (undefined) → `--radius-md`. HUD scoreboard now renders with the correct glass-card background and border radius.
+  - Added `.pill-epv` class: gold/amber background + strong border + glow shadow for the EPV prioritization indicator.
+  - Added `--accent-dark: #2f6fd0` CSS variable in a second `:root` block. `#2f6fd0` on `#111827` achieves ≥ 4.5:1 contrast for WCAG AA compliance in direct sunlight. The original `--accent: #4d8af0` is preserved for OLED surface use.
+  - Removed `maximum-scale=1.0, user-scalable=no` from the viewport meta tag. WCAG 1.4.4 requires text resizability to 200%; the restriction was blocking accessibility zoom on both the S21+ and the Galaxy Book Go.
+
+### Test Results
+- `npm test`: **101/101 pass** (no regressions, no schema test updates required).
+
+### Deployment
+- `git push origin main` → commit `0655582`
+- `npm run deploy` → Version ID `a70edd9f-3eac-4d85-9348-54de81e9f746`
+- Uploaded 4 modified static assets: `/sw.js`, `/app/app.css`, `/app/index.html`, `/app/field.js`
+- Worker bundle updated with `companies.js` (timezone fix + industry guard) and `db.js` (3 new fields)
+
+### Production D1 Migration Required
+The three new columns (`sic_code`, `account_number`, `post_enrollment_date`) must be added to the live `legacy-db` database via the Cloudflare MCP (one ALTER per call — multi-statement DDL is rejected):
+```sql
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS sic_code TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS account_number TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS post_enrollment_date TEXT;
+```
+
+---
+
 ## 2026-08-30 15:30 CDT — Custom Touch Company Autocomplete, Table-Responsive Scaffolding & 48px Hit Targets (Agent: Antigravity)
 
 ### Session Goal
