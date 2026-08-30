@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS companies (
     post_enrollment_date TEXT,
     is_d365_synced BOOLEAN DEFAULT 0,
     renewal_date TEXT,
+    pipeline_stage TEXT DEFAULT 'PROSPECT',
+    stage_entered_at TEXT,
+    snoozed_until TEXT,
+    disqualified_reason TEXT,
+    forecast_ap REAL,
+    forecast_confidence INTEGER,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -76,6 +82,8 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     raw_audio_transcription TEXT,
     ai_structured_notes TEXT,
     sync_tier_status TEXT DEFAULT 'PENDING',
+    next_action_date TEXT,
+    next_action_text TEXT,
     FOREIGN KEY (company_id) REFERENCES companies(company_id)
 );
 CREATE INDEX IF NOT EXISTS idx_companies_coords ON companies(lat, long);
@@ -105,16 +113,52 @@ CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(company_name);
 -- Contact lookup when building a Tier 1 row for an account.
 CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company_id, is_primary_dm);
 
+-- Pipeline CRM: stage filter + snooze wake-up queries.
+CREATE INDEX IF NOT EXISTS idx_companies_pipeline ON companies(pipeline_stage, snoozed_until);
+
+-- Pipeline CRM: next-action task list queries.
+CREATE INDEX IF NOT EXISTS idx_activity_next_action ON activity_logs(company_id, next_action_date);
+
 -- ---------------------------------------------------------------------
--- 5. NON-DESTRUCTIVE MIGRATIONS — add new columns to existing production DB.
---    SQLite silently errors on "duplicate column name", so each is guarded.
---    Safe to re-run at any time; a no-op if the column already exists.
+-- 5. PIPELINE EVENTS — audit log for stage transitions.
+--    Every time pipeline_stage changes, a row lands here so the agent
+--    can review their deal-flow history and the EOD debrief can cite
+--    concrete pipeline movement stats.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pipeline_events (
+    event_id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    from_stage TEXT,
+    to_stage TEXT NOT NULL,
+    changed_at TEXT DEFAULT (datetime('now')),
+    trigger_log_id TEXT,
+    reason TEXT,
+    FOREIGN KEY (company_id) REFERENCES companies(company_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_company ON pipeline_events(company_id, changed_at);
+
+-- ---------------------------------------------------------------------
+-- 6. NON-DESTRUCTIVE MIGRATIONS — add new columns to existing production DB.
+--    All listed ALTERs below have been EXECUTED against production D1
+--    on 2026-08-30. They are kept commented as documentation.
 --    (D1 MCP rejects multi-statement DDL — run one statement per call.)
 -- ---------------------------------------------------------------------
--- ALTER TABLE companies ADD COLUMN IF NOT EXISTS sic_code TEXT;
--- ALTER TABLE companies ADD COLUMN IF NOT EXISTS account_number TEXT;
--- ALTER TABLE companies ADD COLUMN IF NOT EXISTS post_enrollment_date TEXT;
+-- Phase 1 (D365 fields, executed 2026-08-30):
+--   ALTER TABLE companies ADD COLUMN sic_code TEXT;
+--   ALTER TABLE companies ADD COLUMN account_number TEXT;
+--   ALTER TABLE companies ADD COLUMN post_enrollment_date TEXT;
 --
--- To apply on production, run each un-commented ALTER via the Cloudflare MCP:
---   mcp__b974c1ad-f820-4734-9544-136ef3ce9117__d1_database_query
---     database_id: 847928be-c56f-4de4-bff4-083e08db9140
+-- Phase 2 (Pipeline CRM, executed 2026-08-30):
+--   ALTER TABLE activity_logs ADD COLUMN next_action_date TEXT;
+--   ALTER TABLE activity_logs ADD COLUMN next_action_text TEXT;
+--   ALTER TABLE companies ADD COLUMN pipeline_stage TEXT DEFAULT 'PROSPECT';
+--   ALTER TABLE companies ADD COLUMN stage_entered_at TEXT;
+--   ALTER TABLE companies ADD COLUMN snoozed_until TEXT;
+--   ALTER TABLE companies ADD COLUMN disqualified_reason TEXT;
+--   ALTER TABLE companies ADD COLUMN forecast_ap REAL;
+--   ALTER TABLE companies ADD COLUMN forecast_confidence INTEGER;
+--   CREATE TABLE IF NOT EXISTS pipeline_events (...);
+--   CREATE INDEX IF NOT EXISTS idx_companies_pipeline ON companies(pipeline_stage, snoozed_until);
+--   CREATE INDEX IF NOT EXISTS idx_activity_next_action ON activity_logs(company_id, next_action_date);
+--   CREATE INDEX IF NOT EXISTS idx_pipeline_events_company ON pipeline_events(company_id, changed_at);
+

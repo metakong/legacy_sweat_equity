@@ -72,6 +72,12 @@ export function normalizeCompany(raw) {
     account_number: cleanCapped(raw?.account_number, 64),
     post_enrollment_date: asIsoDate(raw?.post_enrollment_date),
     renewal_date: asIsoDate(raw?.renewal_date),
+    pipeline_stage: cleanCapped(raw?.pipeline_stage, 32) || null,
+    stage_entered_at: asIsoDate(raw?.stage_entered_at),
+    snoozed_until: asIsoDate(raw?.snoozed_until),
+    disqualified_reason: cleanCapped(raw?.disqualified_reason, 500),
+    forecast_ap: asMoney(raw?.forecast_ap),
+    forecast_confidence: asCount(raw?.forecast_confidence, 100),
     // A record only counts as synced once it carries the D365 identity that
     // proves it round-tripped. Trusting a client-sent flag here is how
     // net-new leads silently drop out of the Tier 3 export.
@@ -93,8 +99,9 @@ export async function upsertCompany(db, company) {
       street_1, street_2, city, state, zip_code, lat, long,
       lead_source, rating, employees, industry,
       sic_code, account_number, post_enrollment_date,
-      renewal_date, is_d365_synced
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      renewal_date, pipeline_stage, stage_entered_at, snoozed_until,
+      disqualified_reason, forecast_ap, forecast_confidence, is_d365_synced
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(company_id) DO UPDATE SET
       d365_lead_id        = COALESCE(excluded.d365_lead_id, companies.d365_lead_id),
       d365_checksum       = COALESCE(excluded.d365_checksum, companies.d365_checksum),
@@ -115,6 +122,12 @@ export async function upsertCompany(db, company) {
       account_number      = COALESCE(excluded.account_number, companies.account_number),
       post_enrollment_date = COALESCE(excluded.post_enrollment_date, companies.post_enrollment_date),
       renewal_date        = COALESCE(excluded.renewal_date, companies.renewal_date),
+      pipeline_stage      = COALESCE(excluded.pipeline_stage, companies.pipeline_stage),
+      stage_entered_at    = COALESCE(excluded.stage_entered_at, companies.stage_entered_at),
+      snoozed_until       = COALESCE(excluded.snoozed_until, companies.snoozed_until),
+      disqualified_reason = COALESCE(excluded.disqualified_reason, companies.disqualified_reason),
+      forecast_ap         = COALESCE(excluded.forecast_ap, companies.forecast_ap),
+      forecast_confidence = COALESCE(excluded.forecast_confidence, companies.forecast_confidence),
       is_d365_synced      = MAX(excluded.is_d365_synced, companies.is_d365_synced)
   `).bind(
     company.company_id,
@@ -137,6 +150,12 @@ export async function upsertCompany(db, company) {
     company.account_number,
     company.post_enrollment_date,
     company.renewal_date,
+    company.pipeline_stage,
+    company.stage_entered_at,
+    company.snoozed_until,
+    company.disqualified_reason,
+    company.forecast_ap,
+    company.forecast_confidence,
     company.is_d365_synced
   ).run();
 
@@ -313,7 +332,9 @@ export function normalizeActivityLog(raw) {
     ai_structured_notes: typeof notes === 'string'
       ? cleanCapped(notes, LIMITS.notes, { allowNewlines: true })
       : (notes ? JSON.stringify(notes).slice(0, LIMITS.notes) : null),
-    sync_tier_status: matchEnum(raw?.sync_tier_status, SYNC_TIERS) || 'PENDING'
+    sync_tier_status: matchEnum(raw?.sync_tier_status, SYNC_TIERS) || 'PENDING',
+    next_action_date: asIsoDate(raw?.next_action_date),
+    next_action_text: cleanCapped(raw?.next_action_text, 300)
   };
 }
 
@@ -327,8 +348,9 @@ export async function upsertActivityLog(db, log) {
       log_id, company_id, contact_id, timestamp,
       is_in_person, is_initial, is_dm_contact, disposition,
       presentation_date, enrollment_date, projected_ap,
-      raw_audio_transcription, ai_structured_notes, sync_tier_status
-    ) VALUES (?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      raw_audio_transcription, ai_structured_notes, sync_tier_status,
+      next_action_date, next_action_text
+    ) VALUES (?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(log_id) DO UPDATE SET
       contact_id              = COALESCE(excluded.contact_id, activity_logs.contact_id),
       is_in_person            = excluded.is_in_person,
@@ -340,7 +362,9 @@ export async function upsertActivityLog(db, log) {
       projected_ap            = COALESCE(excluded.projected_ap, activity_logs.projected_ap),
       raw_audio_transcription = COALESCE(excluded.raw_audio_transcription, activity_logs.raw_audio_transcription),
       ai_structured_notes     = COALESCE(excluded.ai_structured_notes, activity_logs.ai_structured_notes),
-      sync_tier_status        = excluded.sync_tier_status
+      sync_tier_status        = excluded.sync_tier_status,
+      next_action_date        = COALESCE(excluded.next_action_date, activity_logs.next_action_date),
+      next_action_text        = COALESCE(excluded.next_action_text, activity_logs.next_action_text)
   `).bind(
     log.log_id,
     log.company_id,
@@ -355,7 +379,9 @@ export async function upsertActivityLog(db, log) {
     log.projected_ap,
     log.raw_audio_transcription,
     log.ai_structured_notes,
-    log.sync_tier_status
+    log.sync_tier_status,
+    log.next_action_date,
+    log.next_action_text
   ).run();
 
   return log.log_id;

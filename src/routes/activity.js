@@ -303,7 +303,9 @@ root.post('/transcribe-and-log', async (c) => {
     enrollment_date: structured?.enrollment_date,
     projected_ap: structured?.projected_ap,
     raw_audio_transcription: transcript,
-    ai_structured_notes: structured?.notes ? { ...structured.notes, audio_key: filename } : null
+    ai_structured_notes: structured?.notes ? { ...structured.notes, audio_key: filename } : null,
+    next_action_date: structured?.notes?.next_action_date,
+    next_action_text: structured?.notes?.next_action
   });
 
   await upsertActivityLog(c.env.DB, log);
