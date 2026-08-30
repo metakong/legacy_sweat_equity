@@ -292,13 +292,16 @@ root.post('/transcribe-and-log', async (c) => {
     }
   }
 
+  const manualDisposition = matchEnum(form.get('manual_disposition') || form.get('disposition'), DISPOSITIONS);
+  const finalDisposition = manualDisposition || structured?.disposition || deriveDisposition(booleans);
+
   const log = normalizeActivityLog({
     log_id: logId,
     company_id: companyId,
     contact_id: contactId,
     timestamp: form.get('timestamp'),
     ...booleans,
-    disposition: structured?.disposition || deriveDisposition(booleans),
+    disposition: finalDisposition,
     presentation_date: structured?.presentation_date,
     enrollment_date: structured?.enrollment_date,
     projected_ap: structured?.projected_ap,
@@ -384,7 +387,12 @@ async function writeQueuedLog(env, entry) {
     if (contact) contactId = await upsertContact(env.DB, contact);
   }
 
-  const log = normalizeActivityLog({ ...entry, company_id: companyId, contact_id: contactId });
+  const log = normalizeActivityLog({
+    ...entry,
+    disposition: entry?.manual_disposition || entry?.disposition,
+    company_id: companyId,
+    contact_id: contactId
+  });
   await upsertActivityLog(env.DB, log);
 
   if (entry?.rating) await setCompanyRating(env.DB, companyId, entry.rating);

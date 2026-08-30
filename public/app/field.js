@@ -16,8 +16,10 @@ const state = {
   coords: { ...DEFAULT_COORDS },
   selectedCompanyId: null,
   selectedCompany: null,
+  companies: [],
   suggestions: [],
   binary: { is_in_person: 1, is_initial: 1, is_dm_contact: 0 },
+  funnelOverride: null,
   audioBlob: null,
   audioType: '',
   audioSeconds: 0,
@@ -149,7 +151,8 @@ async function loadMapCompanies(filter = 'all_active') {
   if (!fieldMap) return;
   try {
     const data = await apiFetch(`/api/companies?filter=${encodeURIComponent(filter)}&limit=500`);
-    renderMapPins(data.companies || []);
+    state.companies = data.companies || [];
+    renderMapPins(state.companies);
   } catch (err) {
     console.info('Map companies load skipped:', err.message);
   }
@@ -228,6 +231,76 @@ function locate(onFix) {
     // Without a timeout this hangs indefinitely on a weak field signal.
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
   );
+}
+
+function haversineMiles(lat1, lon1, lat2, lon2) {
+  const toRad = (x) => (x * Math.PI) / 180;
+  const R = 3958.8; // Earth radius in miles
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function initNearestAccount() {
+  const btn = $('btnNearestAccount');
+  if (!btn) return;
+
+  btn.addEventListener('click', async () => {
+    if (state.coords.lat === null || state.coords.long === null) {
+      showToast('GPS coordinates unavailable. Ensure location permissions are enabled.', 'error');
+      return;
+    }
+
+    let candidateCompanies = state.companies;
+    if (!candidateCompanies || candidateCompanies.length === 0) {
+      setButtonBusy(btn, true, 'Finding…');
+      try {
+        const data = await apiFetch('/api/companies?filter=all_active&limit=500');
+        candidateCompanies = data.companies || [];
+        state.companies = candidateCompanies;
+      } catch (err) {
+        showToast('Failed to fetch accounts for proximity search.', 'error');
+        setButtonBusy(btn, false);
+        return;
+      } finally {
+        setButtonBusy(btn, false);
+      }
+    }
+
+    const geoCompanies = candidateCompanies.filter(
+      (c) => c.lat !== null && c.long !== null && typeof c.lat === 'number' && typeof c.long === 'number'
+    );
+
+    if (geoCompanies.length === 0) {
+      showToast('No geocoded accounts available to search.', 'info');
+      return;
+    }
+
+    let nearest = null;
+    let minDistance = Infinity;
+
+    for (const comp of geoCompanies) {
+      const dist = haversineMiles(state.coords.lat, state.coords.long, comp.lat, comp.long);
+      if (dist < minDistance) {
+        minDistance = dist;
+        nearest = comp;
+      }
+    }
+
+    if (nearest && minDistance <= 1.0) {
+      applyCompany(nearest);
+      showToast(`Auto-filled nearest: ${nearest.company_name} (${minDistance < 0.1 ? '<0.1' : minDistance.toFixed(2)} mi)`, 'success');
+    } else if (nearest) {
+      showToast(`Nearest known account (${nearest.company_name}) is ${minDistance.toFixed(1)} mi away (limit 1.0 mi).`, 'info');
+    } else {
+      showToast('No accounts found within 1.0 mile of your GPS location.', 'info');
+    }
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -478,6 +551,19 @@ function initCompanySearch() {
 
   const showDropdown = () => {
     if (dropdown.children.length > 0) {
+      const rect = input.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      if (spaceBelow < 250) {
+        dropdown.style.bottom = '100%';
+        dropdown.style.top = 'auto';
+        dropdown.style.marginBottom = '4px';
+        dropdown.style.marginTop = '0';
+      } else {
+        dropdown.style.bottom = 'auto';
+        dropdown.style.top = '100%';
+        dropdown.style.marginTop = '4px';
+        dropdown.style.marginBottom = '0';
+      }
       dropdown.style.display = 'block';
     }
   };
@@ -716,6 +802,16 @@ function derivedDisposition({ is_in_person, is_initial, is_dm_contact }) {
   return is_initial ? 'Information Left' : 'Follow-Up Scheduled';
 }
 
+function updateDerivedDisposition() {
+  const dispoEl = $('derivedDisposition');
+  if (!dispoEl) return;
+  if (state.funnelOverride) {
+    dispoEl.textContent = state.funnelOverride;
+  } else {
+    dispoEl.textContent = derivedDisposition(state.binary);
+  }
+}
+
 export function setBinaryToggles(inPerson, initial, dmContact) {
   state.binary = {
     is_in_person: Number(inPerson),
@@ -735,10 +831,8 @@ export function setBinaryToggles(inPerson, initial, dmContact) {
   updateGroup('is_initial', state.binary.is_initial);
   updateGroup('is_dm_contact', state.binary.is_dm_contact);
 
-  const dispo = derivedDisposition(state.binary);
-  const dispoEl = $('derivedDisposition');
-  if (dispoEl) dispoEl.textContent = dispo;
-  return dispo;
+  updateDerivedDisposition();
+  return derivedDisposition(state.binary);
 }
 
 function initQuickLogMacros() {
@@ -776,11 +870,32 @@ function initBinaryToggles() {
       });
 
       state.binary[key] = value;
-      $('derivedDisposition').textContent = derivedDisposition(state.binary);
+      updateDerivedDisposition();
     });
   });
 
-  $('derivedDisposition').textContent = derivedDisposition(state.binary);
+  updateDerivedDisposition();
+}
+
+function initFunnelChips() {
+  const chips = document.querySelectorAll('.funnel-chips .filter-chip');
+  if (!chips.length) return;
+
+  chips.forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const funnelVal = chip.dataset.funnel;
+      if (chip.classList.contains('active')) {
+        chip.classList.remove('active');
+        state.funnelOverride = null;
+        updateDerivedDisposition();
+      } else {
+        chips.forEach((c) => c.classList.remove('active'));
+        chip.classList.add('active');
+        state.funnelOverride = funnelVal;
+        $('derivedDisposition').textContent = funnelVal;
+      }
+    });
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -946,6 +1061,8 @@ function resetForm() {
   $('stateInput').value = '';
   $('zipInput').value = '';
   clearCompanySelection();
+  state.funnelOverride = null;
+  document.querySelectorAll('.funnel-chips .filter-chip').forEach((c) => c.classList.remove('active'));
   // Reset 3-tap binary toggles to defaults: In-Person · Initial · Gatekeeper.
   // Without this, door #N inherits door #(N-1)'s "DM Met" state and the
   // derived disposition silently reads "Follow-Up Scheduled" instead of the
@@ -973,37 +1090,43 @@ export async function updateScoreboard() {
   }
 }
 
+function currentActivityPayload() {
+  const company = currentCompanyPayload();
+  if (!company) return null;
+
+  const typedNote = $('voiceTranscript').value.trim();
+  const logId = crypto.randomUUID();
+
+  return {
+    log_id: logId,
+    company_id: state.selectedCompanyId || undefined,
+    // A known account still ships its payload so an edited address is saved;
+    // upsertCompany COALESCEs, so blanks never wipe existing data.
+    company,
+    ...state.binary,
+    manual_disposition: state.funnelOverride || undefined,
+    timestamp: new Date().toISOString(),
+    raw_audio_transcription: state.audioBlob ? undefined : (typedNote || undefined),
+    audioBlob: state.audioBlob || undefined,
+    audioType: state.audioType || undefined
+  };
+}
+
 function initSave() {
   const button = $('saveLogBtn');
 
   button.addEventListener('click', async () => {
-    const company = currentCompanyPayload();
-    if (!company) {
+    const entry = currentActivityPayload();
+    if (!entry) {
       showToast('Enter a company name first.', 'error');
       $('companyInput').focus();
       return;
     }
 
-    const typedNote = $('voiceTranscript').value.trim();
-    const logId = crypto.randomUUID();
-
-    const entry = {
-      log_id: logId,
-      company_id: state.selectedCompanyId || undefined,
-      // A known account still ships its payload so an edited address is saved;
-      // upsertCompany COALESCEs, so blanks never wipe existing data.
-      company,
-      ...state.binary,
-      timestamp: new Date().toISOString(),
-      raw_audio_transcription: state.audioBlob ? undefined : (typedNote || undefined),
-      audioBlob: state.audioBlob || undefined,
-      audioType: state.audioType || undefined
-    };
-
     setButtonBusy(button, true, 'Saving…');
     try {
       await enqueue(entry);
-      state.lastSubmittedLogId = logId;
+      state.lastSubmittedLogId = entry.log_id;
       await updatePendingBadge();
       resetForm();
       showToast(
@@ -1045,10 +1168,12 @@ function initVoiceResultListener() {
 
 export function initFieldView() {
   initMap();
+  initNearestAccount();
   initCompanySearch();
   initInspect();
   initQuickLogMacros();
   initBinaryToggles();
+  initFunnelChips();
   initMic();
   initSave();
   initVoiceResultListener();

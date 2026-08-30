@@ -278,6 +278,7 @@ async function uploadVoiceLog(entry) {
   form.append('timestamp', entry.timestamp);
   if (entry.company_id) form.append('company_id', entry.company_id);
   if (entry.contact_id) form.append('contact_id', entry.contact_id);
+  if (entry.manual_disposition) form.append('manual_disposition', entry.manual_disposition);
   if (entry.company) form.append('company', JSON.stringify(entry.company));
 
   const res = await fetch('/api/transcribe-and-log', {

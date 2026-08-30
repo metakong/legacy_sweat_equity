@@ -121,7 +121,10 @@
             <h2>🏢 Target Account</h2>
 
             <div class="form-group company-autocomplete-wrapper">
-              <label for="companyInput">Company Name</label>
+              <div class="form-label-row">
+                <label for="companyInput">Company Name</label>
+                <button type="button" class="btn btn-secondary" id="btnNearestAccount" title="Find nearest account">📍 Nearest</button>
+              </div>
               <input type="text" id="companyInput" placeholder="Ozark Dental Group"
                      autocomplete="off" maxlength="200" required>
               <ul id="customCompanyDropdown" class="autocomplete-dropdown" style="display:none;" role="listbox" aria-label="Company suggestions"></ul>
@@ -200,6 +203,13 @@
                       data-toggle="is_dm_contact" data-value="0"><span aria-hidden="true">🏢</span> Gatekeeper</button>
               <button class="binary-btn" type="button" role="radio" aria-checked="false"
                       data-toggle="is_dm_contact" data-value="1"><span aria-hidden="true">🤝</span> DM Met</button>
+            </div>
+
+            <div class="funnel-chips" role="group" aria-label="Explicit Funnel Advancement">
+              <button type="button" class="filter-chip" data-funnel="Presentation Scheduled">📅 Presentation</button>
+              <button type="button" class="filter-chip" data-funnel="Callback Requested">📞 Callback</button>
+              <button type="button" class="filter-chip" data-funnel="Enrolled">🏆 Enrolled</button>
+              <button type="button" class="filter-chip" data-funnel="Not Interested">🚫 Not Interested</button>
             </div>
 
             <p class="derived-dispo">

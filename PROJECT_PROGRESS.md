@@ -8,6 +8,37 @@
 
 ---
 
+## 2026-08-30 17:22 CDT — P2 Friction Eradication: GPS Nearest Account, Manual Funnel Chips & Mobile UX (Agent: Antigravity)
+
+### Session Goal
+Execute P2 usability and friction eradication: 1-tap GPS "Nearest Account" auto-fill with Haversine distance matching, compact outcome row for manual funnel advancement without voice dictation, elevated autocomplete z-index (9999), and viewport boundary detection for auto-flipping dropdowns.
+
+### Execution Summary
+
+- **Phase 1: The "Nearest Account" GPS Auto-Fill**
+  - `public/app/index.html`: Added `<button type="button" class="btn btn-secondary" id="btnNearestAccount" title="Find nearest account">📍 Nearest</button>` in `.form-label-row`.
+  - `public/app/field.js`: Implemented `haversineMiles()` calculation and `initNearestAccount()` click handler:
+    - Verifies valid GPS coordinates in `state.coords`.
+    - Iterates over `state.companies` (or queries `/api/companies?filter=all_active&limit=500`).
+    - Locates closest account; if within 1.0 miles, triggers `applyCompany()` to populate company details, address, hints, and dossiers.
+    - Shows feedback toasts detailing proximity or notifying when outside 1.0-mile radius.
+
+- **Phase 2: Compact Outcome Row (No-Voice Funnel Advancement)**
+  - `public/app/index.html`: Added `.funnel-chips` beneath the 3-tap binary section with 4 explicit pipeline stages: `Presentation Scheduled`, `Callback Requested`, `Enrolled`, `Not Interested`.
+  - `public/app/field.js`: Wired `initFunnelChips()` to toggle `state.funnelOverride` and update `#derivedDisposition`.
+  - `public/app/field.js`: Created `currentActivityPayload()` to attach `manual_disposition: state.funnelOverride`. Updated `resetForm()` to reset funnel override state and un-highlight chips.
+  - `public/app/store.js`: Added `manual_disposition` forwarding in `uploadVoiceLog()`.
+  - `src/routes/activity.js`: In `POST /api/transcribe-and-log` and `writeQueuedLog()`, prioritized `manual_disposition` over AI structuring disposition and binary derivation.
+
+- **Phase 3: Z-Index & Autocomplete Mobile Fixes**
+  - `public/app/app.css`: Updated `.autocomplete-dropdown` `z-index` to `9999` to ensure it renders above the mobile navigation bar. Added `.form-label-row` and `.funnel-chips` responsive styling.
+  - `public/app/field.js`: In `initCompanySearch()`, updated `showDropdown()` to inspect viewport space below `#companyInput`. If `< 250px`, flips dropdown upward (`bottom: 100%; top: auto;`) to prevent viewport clipping.
+
+### Test Results
+- `npm test`: **101/101 passed** cleanly.
+
+---
+
 ## 2026-08-30 17:15 CDT — Data Preservation, XSS Guardrails, API Auth Middleware & Pre-Cache Fixes (Agent: Antigravity)
 
 ### Session Goal

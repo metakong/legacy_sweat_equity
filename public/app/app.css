@@ -314,12 +314,43 @@ input[type="checkbox"] {
   position: relative;
 }
 
+.form-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+
+.form-label-row label {
+  margin-bottom: 0;
+}
+
+.form-label-row #btnNearestAccount {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.82rem;
+  min-height: 38px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--card-border);
+  color: var(--accent);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  transition: all 0.15s ease;
+}
+
+.form-label-row #btnNearestAccount:hover {
+  background: var(--card-border);
+  color: #ffffff;
+}
+
 .autocomplete-dropdown {
   position: absolute;
   top: 100%;
   left: 0;
   right: 0;
-  z-index: 50;
+  z-index: 9999;
   background: var(--bg-elevated);
   border: 1px solid var(--card-border-strong);
   border-radius: var(--radius-sm);
@@ -1471,6 +1502,20 @@ input[type="checkbox"] {
   border-color: var(--accent);
   color: #ffffff;
   box-shadow: 0 2px 8px rgba(77, 138, 240, 0.35);
+}
+
+.funnel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.85rem 0 0.5rem 0;
+}
+
+.funnel-chips .filter-chip {
+  flex: 1 1 calc(50% - 0.5rem);
+  font-size: 0.82rem;
+  padding: 0.5rem 0.65rem;
+  min-height: 44px;
 }
 
 /* ── Dynamic Map Pin Markers ──────────────────────────────── */
