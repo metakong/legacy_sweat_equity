@@ -110,6 +110,7 @@ companies.get('/', async (c) => {
            (SELECT a.disposition FROM activity_logs a WHERE a.company_id = co.company_id ORDER BY a.timestamp DESC LIMIT 1) AS latest_disposition,
            (SELECT json_extract(a.ai_structured_notes, '$.next_action') FROM activity_logs a WHERE a.company_id = co.company_id AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_next_action,
            (SELECT json_extract(a.ai_structured_notes, '$.product_interests') FROM activity_logs a WHERE a.company_id = co.company_id AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_product_interests,
+           (SELECT json_extract(a.ai_structured_notes, '$.objections') FROM activity_logs a WHERE a.company_id = co.company_id AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_objections,
            CASE
              WHEN (
                SELECT a.disposition FROM activity_logs a

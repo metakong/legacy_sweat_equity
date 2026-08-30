@@ -259,6 +259,35 @@ function renderProductInterests(rawInterests) {
   }
 }
 
+function renderObjections(rawObjections) {
+  const container = $('objectionTagContainer');
+  if (!container) return;
+
+  let objections = [];
+  if (Array.isArray(rawObjections)) {
+    objections = rawObjections;
+  } else if (typeof rawObjections === 'string' && rawObjections.trim()) {
+    try {
+      const parsed = JSON.parse(rawObjections);
+      if (Array.isArray(parsed)) objections = parsed;
+    } catch {
+      /* ignore invalid JSON */
+    }
+  }
+
+  if (objections.length > 0) {
+    container.replaceChildren(...objections.map((obj) => el('span', {
+      className: 'objection-tag',
+      text: `🚫 ${obj}`
+    })));
+    container.hidden = false;
+    $('dossierPanel').hidden = false;
+  } else {
+    container.replaceChildren();
+    container.hidden = true;
+  }
+}
+
 function applyCompany(company) {
   state.selectedCompanyId = company.company_id;
   state.selectedCompany = company;
@@ -295,6 +324,13 @@ function applyCompany(company) {
   } else {
     renderProductInterests(null);
   }
+
+  // Surface Objections if recorded
+  if (company.latest_objections) {
+    renderObjections(company.latest_objections);
+  } else {
+    renderObjections(null);
+  }
 }
 
 function clearCompanySelection() {
@@ -304,6 +340,7 @@ function clearCompanySelection() {
   $('companyMatchHint').className = 'field-hint';
   showNextActionCallout(null);
   renderProductInterests(null);
+  renderObjections(null);
 }
 
 function initCompanySearch() {
@@ -401,7 +438,7 @@ function initInspect() {
   });
 }
 
-function renderDossier({ bullets = [], sources = [], next_action, product_interests, error }) {
+function renderDossier({ bullets = [], sources = [], next_action, product_interests, objections, error }) {
   const panel = $('dossierPanel');
   const list = $('dossierList');
   panel.hidden = false;
@@ -412,6 +449,10 @@ function renderDossier({ bullets = [], sources = [], next_action, product_intere
 
   if (product_interests) {
     renderProductInterests(product_interests);
+  }
+
+  if (objections) {
+    renderObjections(objections);
   }
 
   if (error) {

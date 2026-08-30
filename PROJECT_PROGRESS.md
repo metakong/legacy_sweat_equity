@@ -8,6 +8,27 @@
 
 ---
 
+## 2026-08-30 12:45 CDT — Objection Warning Badges in Target Dossier (Agent: Antigravity)
+
+### Session Goal
+Implement red warning objection badges in the Target Dossier across company lookup, pre-call scan, and map account selection to prepare the agent with historical account objections prior to outreach.
+
+### Execution Summary
+- **Backend Query Expansion (`src/routes/companies.js`)**:
+  - Expanded `GET /api/companies` query with `latest_objections` subquery extracting the JSON array from `activity_logs.ai_structured_notes.objections`.
+- **UI Styling (`public/app/app.css`)**:
+  - Added `.objection-tag` (`#450a0a` dark red OLED background, `#b91c1c` border, `#fca5a5` text, `🚫` icon) and `.objection-tag-container`.
+- **Target Dossier Rendering (`public/app/index.html`, `public/app/field.js`)**:
+  - Added `#objectionTagContainer` in `#dossierPanel`.
+  - Implemented `renderObjections(rawObjections)` handling raw JSON arrays and JSON strings.
+  - Linked objection badge rendering into `applyCompany()`, `renderDossier()`, and reset cleanup in `clearCompanySelection()`.
+- **Dual Synchronization**:
+  - Verified all 92 unit tests passing (`npm test`).
+  - Committed and pushed to GitHub `origin/main`.
+  - Deployed Worker and static assets to Cloudflare (`npm run deploy`).
+
+---
+
 ## 2026-08-30 12:35 CDT — Static 19-Bucket Industry Dropdown, Integer Sorting & Skip Reset (Agent: Antigravity)
 
 ### Session Goal

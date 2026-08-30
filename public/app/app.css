@@ -1380,6 +1380,26 @@ input[type="checkbox"] {
   font-weight: 600;
 }
 
+.objection-tag-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.objection-tag {
+  background: #450a0a;
+  color: #fca5a5;
+  border: 1px solid #b91c1c;
+  padding: 0.15rem 0.6rem;
+  border-radius: 99px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 /* ── Mobile Bottom Navigation Bar (100% Feature Parity) ── */
 @media (min-width: 1024px) {
   .mobile-nav {
