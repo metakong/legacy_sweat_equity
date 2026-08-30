@@ -1318,7 +1318,8 @@ input[type="checkbox"] {
   line-height: 1.4;
 }
 
-/* ── Route Filter Select ──────────────────────────────────── */
+/* ── Route Filter & Search ────────────────────────────────── */
+.route-search,
 .route-filter-select {
   background: var(--bg-inset);
   border: 1px solid var(--card-border);
@@ -1327,6 +1328,18 @@ input[type="checkbox"] {
   padding: 0.4rem 0.65rem;
   font-size: 0.82rem;
   font-weight: 500;
+}
+
+.route-search {
+  min-width: 180px;
+}
+
+.route-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.route-filter-select {
   cursor: pointer;
 }
 

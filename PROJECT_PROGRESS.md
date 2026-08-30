@@ -8,6 +8,30 @@
 
 ---
 
+## 2026-08-30 11:55 CDT — Route Planner Fuzzy Search, Dynamic Industry Filter, GPS Distance Sorting & Contextual Clustering (Agent: Antigravity)
+
+### Session Goal
+Upgrade the desktop Route Planner (`#view-route`) with client-side fuzzy search, dynamic industry filtering, GPS-based Haversine distance calculation and sorting, and contextual clustering.
+
+### Execution Summary
+- **UI Enhancements (`public/app/index.html`, `public/app/app.css`)**:
+  - Added `#routeSearchInput` for instant multi-field fuzzy search across company name, street, city, ZIP, and industry.
+  - Added dynamic `#routeIndustrySelect` dropdown with 'All Industries' and sorted unique territory industry categories.
+  - Added a clickable `Dist. 📍` header (`#sortDistance`) for ascending/descending distance sort toggles.
+  - Added CSS styling for `.route-search` matching `.route-filter-select` in the One UI OLED dark theme.
+- **Client-Side State & Logic (`public/app/desktop.js`)**:
+  - Maintained `masterRouteTargets` array and `userCoords` GPS position state.
+  - Calculated real-time straight-line distance in miles using `haversineMiles()`.
+  - Implemented `renderRouteTable()` for multi-criteria filtering (status, industry, search query) and distance sorting.
+  - Updated `#selectAllTargets` to operate strictly on the currently filtered/visible table rows.
+  - Updated `#clusterRouteBtn` to contextually select the first 11 accounts visible in the filtered view.
+- **Dual Synchronization (GitHub & Cloudflare)**:
+  - Verified all 91 unit tests passing (`npm test`).
+  - Committed and pushed changes to GitHub `origin/main`.
+  - Deployed updated Worker and static assets to Cloudflare (`npm run deploy`).
+
+---
+
 ## 2026-08-30 11:25 CDT — Live Remote D1 Database Deduplication (Agent: Antigravity)
 
 ### Session Goal

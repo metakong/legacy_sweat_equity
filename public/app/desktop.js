@@ -27,6 +27,11 @@ import { cacheDossier } from './store.js';
 
 const MAX_ROUTE_STOPS = 12;
 
+let masterRouteTargets = [];
+let userCoords = null;
+let currentlyRenderedTargets = [];
+let sortDistanceAsc = true;
+
 const desktopState = {
   targets: [],
   selectedTargets: new Set(),
@@ -55,42 +60,143 @@ function haversineMiles(a, b) {
 
 async function loadTargets() {
   const body = $('targetsBody');
-  body.replaceChildren(el('tr', { children: [td('Loading targets…', 'empty-cell')] }));
-
-  const filterSelect = $('routeFilterSelect');
-  const filter = filterSelect?.value || 'all_active';
+  body.replaceChildren(el('tr', {
+    children: [el('td', { className: 'empty-cell', text: 'Loading targets…', attrs: { colspan: '5' } })]
+  }));
 
   try {
-    const data = await apiFetch(`/api/companies?filter=${encodeURIComponent(filter)}&limit=300`);
-    desktopState.targets = (data.companies || []).filter((t) => t.lat !== null && t.long !== null);
-    const missingCoords = (data.companies || []).length - desktopState.targets.length;
-    renderTargets();
+    // Acquire user GPS position if available
+    userCoords = await currentPosition();
+
+    // Load active companies
+    const data = await apiFetch('/api/companies?filter=all_active&limit=1000');
+    const valid = (data.companies || []).filter((t) => t.lat !== null && t.long !== null);
+    const missingCoords = (data.companies || []).length - valid.length;
+
+    // Calculate distance for each target
+    masterRouteTargets = valid.map((target) => ({
+      ...target,
+      distance: (userCoords && target.lat !== null && target.long !== null)
+        ? haversineMiles(userCoords, target)
+        : null
+    }));
+
+    desktopState.targets = masterRouteTargets;
+
+    // Populate dynamic industry filter options
+    populateIndustryFilter();
+
+    // Render table with filtering & distance sorting
+    renderRouteTable();
+
     if (missingCoords > 0) {
       showToast(`${missingCoords} account(s) have no coordinates and cannot be routed.`, 'info');
     }
   } catch (err) {
-    body.replaceChildren(el('tr', { children: [td(`Could not load targets: ${err.message}`, 'empty-cell')] }));
+    body.replaceChildren(el('tr', {
+      children: [el('td', { className: 'empty-cell', text: `Could not load targets: ${err.message}`, attrs: { colspan: '5' } })]
+    }));
   }
 }
 
-function renderTargets() {
-  const body = $('targetsBody');
+function populateIndustryFilter() {
+  const select = $('routeIndustrySelect');
+  if (!select) return;
 
-  if (desktopState.targets.length === 0) {
+  const currentVal = select.value;
+  const industries = new Set();
+  for (const t of masterRouteTargets) {
+    if (t.industry && typeof t.industry === 'string' && t.industry.trim().length > 0) {
+      industries.add(t.industry.trim());
+    }
+  }
+
+  const sortedIndustries = Array.from(industries).sort((a, b) => a.localeCompare(b));
+
+  select.replaceChildren(
+    el('option', { attrs: { value: 'all' }, text: 'All Industries' }),
+    ...sortedIndustries.map((ind) => el('option', {
+      attrs: { value: ind, ...(ind === currentVal ? { selected: 'selected' } : {}) },
+      text: ind
+    }))
+  );
+
+  if (currentVal && industries.has(currentVal)) {
+    select.value = currentVal;
+  } else {
+    select.value = 'all';
+  }
+}
+
+function renderRouteTable() {
+  const body = $('targetsBody');
+  if (!body) return;
+
+  const filterSelect = $('routeFilterSelect');
+  const industrySelect = $('routeIndustrySelect');
+  const searchInput = $('routeSearchInput');
+
+  const filter = filterSelect?.value || 'all_active';
+  const selectedIndustry = industrySelect?.value || 'all';
+  const searchQuery = (searchInput?.value || '').trim().toLowerCase();
+
+  // 1. Filter
+  let filtered = masterRouteTargets.filter((t) => {
+    // Untouched vs Follow-ups
+    if (filter === 'untouched' && Number(t.touch_count || 0) > 0) return false;
+    if (filter === 'follow_ups' && Number(t.touch_count || 0) === 0) return false;
+
+    // Industry
+    if (selectedIndustry !== 'all' && (t.industry || '').trim() !== selectedIndustry) return false;
+
+    // Fuzzy search (name, street, city, ZIP, industry)
+    if (searchQuery.length > 0) {
+      const matchName = t.company_name && t.company_name.toLowerCase().includes(searchQuery);
+      const matchStreet1 = t.street_1 && t.street_1.toLowerCase().includes(searchQuery);
+      const matchStreet2 = t.street_2 && t.street_2.toLowerCase().includes(searchQuery);
+      const matchCity = t.city && t.city.toLowerCase().includes(searchQuery);
+      const matchZip = t.zip_code && t.zip_code.toLowerCase().includes(searchQuery);
+      const matchInd = t.industry && t.industry.toLowerCase().includes(searchQuery);
+      if (!matchName && !matchStreet1 && !matchStreet2 && !matchCity && !matchZip && !matchInd) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  // 2. Sort by distance (null distances at the end)
+  filtered.sort((a, b) => {
+    if (a.distance === null && b.distance === null) {
+      return a.company_name.localeCompare(b.company_name);
+    }
+    if (a.distance === null) return 1;
+    if (b.distance === null) return -1;
+    return sortDistanceAsc ? (a.distance - b.distance) : (b.distance - a.distance);
+  });
+
+  currentlyRenderedTargets = filtered;
+  desktopState.targets = filtered;
+
+  if (filtered.length === 0) {
     body.replaceChildren(el('tr', {
-      children: [td('No untouched accounts. Scout some in the field log.', 'empty-cell')]
+      children: [el('td', { className: 'empty-cell', text: 'No matching accounts found.', attrs: { colspan: '5' } })]
     }));
+    updateSelectAllCheckboxState();
     return;
   }
 
-  body.replaceChildren(...desktopState.targets.map((target) => {
+  body.replaceChildren(...filtered.map((target) => {
+    const isSelected = desktopState.selectedTargets.has(target.company_id);
     const checkbox = el('input', {
       attrs: {
         type: 'checkbox',
         'aria-label': `Include ${target.company_name} in the route`,
-        checked: desktopState.selectedTargets.has(target.company_id)
+        ...(isSelected ? { checked: 'checked' } : {})
       }
     });
+    checkbox.checked = isSelected;
+
     checkbox.addEventListener('change', () => {
       if (checkbox.checked) {
         if (desktopState.selectedTargets.size >= MAX_ROUTE_STOPS) {
@@ -102,17 +208,33 @@ function renderTargets() {
       } else {
         desktopState.selectedTargets.delete(target.company_id);
       }
+      updateSelectAllCheckboxState();
     });
+
+    const distText = target.distance !== null ? `${target.distance.toFixed(1)} mi` : '—';
 
     return el('tr', {
       children: [
         el('td', { className: 'col-check', children: [checkbox] }),
         td(target.company_name),
         td([target.street_1, target.city].filter(Boolean).join(', ')),
+        td(distText),
         td(target.employees ?? '—')
       ]
     });
   }));
+
+  updateSelectAllCheckboxState();
+}
+
+function updateSelectAllCheckboxState() {
+  const selectAll = $('selectAllTargets');
+  if (!selectAll) return;
+  if (currentlyRenderedTargets.length === 0) {
+    selectAll.checked = false;
+    return;
+  }
+  selectAll.checked = currentlyRenderedTargets.every((t) => desktopState.selectedTargets.has(t.company_id));
 }
 
 function initRouteMap() {
@@ -230,35 +352,43 @@ function renderRoute(result) {
 }
 
 async function clusterRoute() {
-  if (desktopState.targets.length === 0) {
-    showToast('No active targets to cluster.', 'error');
+  if (currentlyRenderedTargets.length === 0) {
+    showToast('No active targets in current filter to cluster.', 'error');
     return;
   }
 
-  const start = (await currentPosition()) || { lat: 37.2089, long: -93.2923 };
-
-  // Calculate straight-line distance to each target
-  const scored = desktopState.targets.map((target) => ({
-    target,
-    dist: haversineMiles(start, target)
-  }));
-
-  scored.sort((a, b) => a.dist - b.dist);
-
   desktopState.selectedTargets.clear();
-  const closest = scored.slice(0, 11);
-  closest.forEach(({ target }) => desktopState.selectedTargets.add(target.company_id));
+  const closest = currentlyRenderedTargets.slice(0, 11);
+  closest.forEach((target) => desktopState.selectedTargets.add(target.company_id));
 
-  renderTargets();
-  showToast(`Queued ${closest.length} closest targets to your location.`, 'success');
+  renderRouteTable();
+  showToast(`Queued ${closest.length} closest targets from current view.`, 'success');
 }
 
 function initRouteTab() {
   $('refreshTargetsBtn').addEventListener('click', loadTargets);
 
+  const searchInput = $('routeSearchInput');
+  if (searchInput) {
+    searchInput.addEventListener('input', renderRouteTable);
+  }
+
   const filterSelect = $('routeFilterSelect');
   if (filterSelect) {
-    filterSelect.addEventListener('change', loadTargets);
+    filterSelect.addEventListener('change', renderRouteTable);
+  }
+
+  const industrySelect = $('routeIndustrySelect');
+  if (industrySelect) {
+    industrySelect.addEventListener('change', renderRouteTable);
+  }
+
+  const sortDistTh = $('sortDistance');
+  if (sortDistTh) {
+    sortDistTh.addEventListener('click', () => {
+      sortDistanceAsc = !sortDistanceAsc;
+      renderRouteTable();
+    });
   }
 
   const clusterBtn = $('clusterRouteBtn');
@@ -267,14 +397,15 @@ function initRouteTab() {
   }
 
   $('selectAllTargets').addEventListener('change', (event) => {
-    desktopState.selectedTargets.clear();
     if (event.target.checked) {
-      desktopState.targets.slice(0, MAX_ROUTE_STOPS).forEach((t) => desktopState.selectedTargets.add(t.company_id));
-      if (desktopState.targets.length > MAX_ROUTE_STOPS) {
+      currentlyRenderedTargets.slice(0, MAX_ROUTE_STOPS).forEach((t) => desktopState.selectedTargets.add(t.company_id));
+      if (currentlyRenderedTargets.length > MAX_ROUTE_STOPS) {
         showToast(`Selected the first ${MAX_ROUTE_STOPS} — that is the optimizer's ceiling.`, 'info');
       }
+    } else {
+      currentlyRenderedTargets.forEach((t) => desktopState.selectedTargets.delete(t.company_id));
     }
-    renderTargets();
+    renderRouteTable();
   });
 
   $('optimizeRouteBtn').addEventListener('click', async () => {
