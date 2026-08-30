@@ -247,6 +247,14 @@
                 <select id="routeIndustrySelect" class="route-filter-select" aria-label="Industry filter">
                   <option value="all">All Industries</option>
                 </select>
+                <select id="routeDirectionSelect" class="route-filter-select" aria-label="Direction filter">
+                  <option value="all">All Directions</option>
+                  <option value="NW">Northwest</option>
+                  <option value="NE">Northeast</option>
+                  <option value="SW">Southwest</option>
+                  <option value="SE">Southeast</option>
+                </select>
+                <button class="btn-secondary btn-inline" id="refreshLocationBtn" type="button" title="Update GPS Location">📍 Update Location</button>
                 <button class="btn-secondary btn-inline" id="clusterRouteBtn" type="button" title="Select 11 closest accounts to your location">📍 Cluster 11 Closest</button>
                 <button class="btn-secondary btn-inline" id="refreshTargetsBtn" type="button">Refresh</button>
               </div>
@@ -268,11 +276,12 @@
                         <th scope="col">Company</th>
                         <th scope="col">Address</th>
                         <th scope="col" id="sortDistance" style="cursor: pointer;" title="Sort by Distance">Dist. 📍</th>
-                        <th scope="col">Employees</th>
+                        <th scope="col" id="sortEmployees" style="cursor: pointer;" title="Sort by Employees">Emp. 👥</th>
+                        <th scope="col" class="col-skip" title="Skip account">Skip</th>
                       </tr>
                     </thead>
                     <tbody id="targetsBody">
-                      <tr><td colspan="5" class="empty-cell">Loading targets…</td></tr>
+                      <tr><td colspan="6" class="empty-cell">Loading targets…</td></tr>
                     </tbody>
                   </table>
                 </div>

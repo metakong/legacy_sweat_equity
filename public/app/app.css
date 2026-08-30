@@ -667,7 +667,26 @@ input[type="checkbox"] {
 .data-table tbody tr:last-child td { border-bottom: none; }
 
 .col-check { width: 44px; text-align: center; }
+.col-skip { width: 44px; text-align: center; }
 .empty-cell { text-align: center; color: var(--text-muted); padding: 2rem 1rem !important; }
+
+.btn-skip {
+  background: transparent;
+  border: none;
+  color: #ef4444;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: bold;
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.btn-skip:hover {
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.1);
+}
 
 .cell-sub {
   display: block;

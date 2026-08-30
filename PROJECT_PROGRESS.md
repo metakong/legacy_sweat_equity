@@ -8,6 +8,29 @@
 
 ---
 
+## 2026-08-30 12:00 CDT — Route Planner Compass Quadrant Filtering, Employee Sorting, GPS Refresh & Skip Toggle (Agent: Antigravity)
+
+### Session Goal
+Upgrade the Route Planner with compass quadrant filtering (NW, NE, SW, SE), multi-variable sorting (Distance and Employees with directional toggles), live in-field GPS refresh, and a client-side session skip button.
+
+### Execution Summary
+- **UI Enhancements (`public/app/index.html`, `public/app/app.css`)**:
+  - Added `#routeDirectionSelect` dropdown supporting Northwest (`NW`), Northeast (`NE`), Southwest (`SW`), and Southeast (`SE`) quadrant filters.
+  - Added `#refreshLocationBtn` (`📍 Update Location`) for instantaneous live GPS re-acquisition.
+  - Updated `#targetsTable` header with sortable `#sortEmployees` (`Emp. 👥`) and a new Skip column (`.col-skip`).
+  - Added `.btn-skip` styling with smooth hover states and red accents.
+- **Client-Side Math & State (`public/app/desktop.js`)**:
+  - Implemented `getQuadrant(userLat, userLon, targetLat, targetLon)` computing real-time bearings relative to current user coordinates.
+  - Maintained `skippedTargets` session set; accounts skipped with `✕` are excluded from the current routing session and selection lists.
+  - Added `refreshGpsLocation()` updating user position, distances, and compass bearings across all territory accounts without a full network re-fetch.
+  - Implemented multi-variable sorting toggling between straight-line distance and headcount employees (ascending/descending with visual header indicators `▲`/`▼`).
+- **Dual Synchronization (GitHub & Cloudflare)**:
+  - Verified all 91 unit tests passing (`npm test`).
+  - Committed and pushed to GitHub `origin/main`.
+  - Deployed Worker and static assets to Cloudflare (`npm run deploy`).
+
+---
+
 ## 2026-08-30 11:55 CDT — Route Planner Fuzzy Search, Dynamic Industry Filter, GPS Distance Sorting & Contextual Clustering (Agent: Antigravity)
 
 ### Session Goal
