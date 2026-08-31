@@ -706,8 +706,12 @@ function initRouteTab() {
         }
       } else {
         // Multi-leg route (13-24 stops split into Morning & Afternoon legs)
-        const leg1Ids = ids.slice(0, MAX_LEG_STOPS);
-        const leg2Ids = ids.slice(MAX_LEG_STOPS, MAX_ROUTE_STOPS);
+        const targetsToRoute = ids.map(id => desktopState.targets.find(t => t.company_id === id)).filter(Boolean);
+        targetsToRoute.sort((a, b) => (b.lat || 0) - (a.lat || 0)); // North to South split
+        const sortedIds = targetsToRoute.map(t => t.company_id);
+
+        const leg1Ids = sortedIds.slice(0, MAX_LEG_STOPS);
+        const leg2Ids = sortedIds.slice(MAX_LEG_STOPS, MAX_ROUTE_STOPS);
 
         const result1 = await apiPost('/api/route/optimize', { company_ids: leg1Ids, start });
         const lastStop1 = result1.sequence?.[result1.sequence.length - 1];

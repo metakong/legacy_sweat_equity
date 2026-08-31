@@ -12,6 +12,13 @@
 
 import { $, showToast } from './ui.js';
 
+async function requestPersistentStorage() {
+  if (navigator.storage && navigator.storage.persist) {
+    const isPersisted = await navigator.storage.persist();
+    console.log(`Storage persistence granted: ${isPersisted}`);
+  }
+}
+
 const DB_NAME = 'AflacProspectDB';
 const DB_VERSION = 2;
 const STORE = 'queue';
@@ -26,6 +33,8 @@ export const dbReady = new Promise((resolve, reject) => {
 });
 
 export function initStore() {
+  requestPersistentStorage();
+  
   // The retired roofing app's database is dead weight in the same origin.
   // Deleting it reclaims whatever queued door photos were left behind.
   try { indexedDB.deleteDatabase('SweatEquityDB'); } catch { /* best effort */ }
@@ -241,7 +250,7 @@ export async function syncQueue() {
       try {
         const res = await fetch('/api/sync', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': 'LEGACY_EDGE_KEY_2026' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ logs: batch.map(toSyncPayload) })
         });
         if (!res.ok) throw new Error(`Sync rejected (${res.status})`);
@@ -303,7 +312,6 @@ async function uploadVoiceLog(entry) {
 
   const res = await fetch('/api/transcribe-and-log', {
     method: 'POST',
-    headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026' },
     body: form
   });
   const data = await res.json().catch(() => ({}));

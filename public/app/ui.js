@@ -113,7 +113,6 @@ export function initViewSwitcher() {
 export async function apiFetch(path, options = {}) {
   const headers = {
     'Content-Type': 'application/json',
-    'x-api-key': 'LEGACY_EDGE_KEY_2026',
     ...(options.headers || {})
   };
   const res = await fetch(path, { ...options, headers });
@@ -131,7 +130,7 @@ export async function apiFetch(path, options = {}) {
 
 export const apiPost = (path, body) => apiFetch(path, {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json', 'x-api-key': 'LEGACY_EDGE_KEY_2026' },
+  headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body)
 });
 

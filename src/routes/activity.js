@@ -127,20 +127,26 @@ Rules:
  * A model is not a validator, so every field is re-checked against the same
  * coercers the manual paths use.
  */
-async function structureTranscript(env, transcript, booleans) {
+async function structureTranscript(env, transcript, booleans, previousContext = null) {
   const today = businessDate();
+  
+  const userPrompt = [
+    `Contact channel: ${booleans.is_in_person ? 'in person' : 'phone call'}`,
+    `Touch type: ${booleans.is_initial ? 'initial contact' : 'follow-up'}`,
+    `Reached: ${booleans.is_dm_contact ? 'the decision maker' : 'a gatekeeper or staff member'}`,
+  ];
+  
+  if (previousContext) {
+    userPrompt.push('', 'Previous history with this account:', previousContext);
+  }
+  
+  userPrompt.push('', 'Field note transcript:', transcript);
+
   const raw = await chatCompletion(env, {
     taskTier: 'simple',
     model: env.OPENROUTER_STRUCTURE_MODEL || DEFAULT_MODELS.simple || DEFAULT_MODELS.structure,
     system: buildStructuringPrompt(today),
-    user: [
-      `Contact channel: ${booleans.is_in_person ? 'in person' : 'phone call'}`,
-      `Touch type: ${booleans.is_initial ? 'initial contact' : 'follow-up'}`,
-      `Reached: ${booleans.is_dm_contact ? 'the decision maker' : 'a gatekeeper or staff member'}`,
-      '',
-      'Field note transcript:',
-      transcript
-    ].join('\n'),
+    user: userPrompt.join('\n'),
     json: true,
     maxTokens: 900
   });
@@ -294,7 +300,25 @@ root.post('/transcribe-and-log', async (c) => {
 
   if (transcript) {
     try {
-      structured = await structureTranscript(c.env, transcript, booleans);
+      const recentTouches = await c.env.DB.prepare(`
+        SELECT timestamp, disposition, ai_structured_notes
+        FROM activity_logs
+        WHERE company_id = ?
+        ORDER BY timestamp DESC
+        LIMIT 2
+      `).bind(companyId).all();
+      
+      const previousContext = recentTouches.results?.length ? recentTouches.results.map(t => {
+        let notes = '';
+        if (t.ai_structured_notes) {
+          try {
+             notes = JSON.stringify(parseJsonLoose(t.ai_structured_notes));
+          } catch { notes = String(t.ai_structured_notes); }
+        }
+        return `Touch on ${t.timestamp}: Disposition: ${t.disposition}. Notes: ${notes}`;
+      }).join('\n') : null;
+
+      structured = await structureTranscript(c.env, transcript, booleans, previousContext);
       if (!structured) degraded = 'structuring_unparseable';
     } catch (err) {
       console.error('Structuring failed:', err);

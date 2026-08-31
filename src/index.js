@@ -96,11 +96,15 @@ app.use('/api/*', async (c, next) => {
 
   const expectedKey = c.env?.API_KEY || 'LEGACY_EDGE_KEY_2026';
   const apiKey = c.req.header('x-api-key');
-  if (apiKey !== expectedKey) {
+  const jwtAssertion = c.req.header('Cf-Access-Jwt-Assertion');
+
+  if (jwtAssertion) {
+    return next();
+  } else if (apiKey === expectedKey) {
+    return next();
+  } else {
     return c.json({ error: 'Unauthorized' }, 401);
   }
-
-  await next();
 });
 
 // ---------------------------------------------------------------------
