@@ -8,7 +8,7 @@
 
 import { Hono } from 'hono';
 import { LIMITS, cleanCapped, asId, asCount, matchEnum, LEAD_SOURCES } from '../lib/validate.js';
-import { DEFAULT_MODELS, ProviderError, tavilySearch, chatCompletion } from '../lib/ai.js';
+import { DEFAULT_MODELS, ProviderError, tavilySearch, chatCompletion, generateDossier } from '../lib/ai.js';
 
 const enrich = new Hono();
 
@@ -41,9 +41,13 @@ export function getRecommendedProducts(industry) {
   return INDUSTRY_PRODUCT_RECOMMENDATIONS[industry.trim()] || INDUSTRY_PRODUCT_RECOMMENDATIONS['Other Commercial'];
 }
 
-function buildEnrichSystemPrompt(recommendedProducts = []) {
+function buildEnrichSystemPrompt(recommendedProducts = [], { pipelineStage = 'PROSPECT', latestDisposition = 'None', touchCount = 0 } = {}) {
   const prodStr = recommendedProducts.length > 0 ? recommendedProducts.join(', ') : 'Accident, Short-Term Disability, Hospital Indemnity';
-  return `You brief an independent Aflac insurance agent immediately before a cold B2B walk-in. You read raw web search results and return exactly three markdown bullets, in this order and with these exact labels:
+  return `You brief an independent Aflac insurance agent immediately before a cold B2B walk-in.
+
+Context: This prospect is currently in stage ${pipelineStage}. Previous disposition: ${latestDisposition}. Total touches: ${touchCount}.
+
+You read raw web search results and return exactly three markdown bullets, in this order and with these exact labels:
 
 - **Executives:** named decision makers and their titles (owner, president, HR director, office manager). Prefer the person who would sign off on a voluntary-benefits offering.
 - **Headcount:** employee count or a tight range, plus the basis for it. Aflac needs 3+ W-2 employees, so state whether that bar is clearly met.
@@ -52,12 +56,13 @@ function buildEnrichSystemPrompt(recommendedProducts = []) {
 Hard rules:
 - Output ONLY the three bullets. No preamble, no heading, no closing line.
 - One or two sentences per bullet. This is read on a phone screen.
-- If the search results do not support a bullet, write "Not found in public sources." — never guess a name, a number, or an event.
+- If specific Decision Maker (DM) names or exact headcounts are missing from the raw content, you must output a high-contrast directive: 'Data stale. Dial main line to verify'.
+- If the search results do not support a bullet, write "Data stale. Dial main line to verify" or "Not found in public sources." — never guess a name, a number, or an event.
 - Never state a fact the search results do not contain.`;
 }
 
 /**
- * Body: { company_name, address?, street_1?, city?, state?, zip_code?, company_id? }
+ * Body: { company_name, address?, street_1?, city?, state?, zip_code?, company_id?, pipeline_stage?, latest_disposition?, touch_count? }
  * Returns markdown bullets plus the sources they came from.
  */
 enrich.post('/', async (c) => {
@@ -78,12 +83,11 @@ enrich.post('/', async (c) => {
       .filter(Boolean)
       .join(', ');
 
+  // Strict query: company name, city, and state
   const query = [
     companyName,
-    address || 'Springfield Missouri',
-    'company owner OR president OR HR director number of employees industry',
-    '"Springfield Business Journal" OR "Springfield News-Leader"'
-  ].join(' ');
+    address || 'Springfield, MO'
+  ].filter(Boolean).join(', ');
 
   // Prioritize the company's own domain (when known) plus the two
   // highest-signal Springfield local business sources. Tavily treats these
@@ -96,7 +100,9 @@ enrich.post('/', async (c) => {
   try {
     search = await tavilySearch(c.env, query.slice(0, 400), {
       includeDomains,
-      days: 90
+      days: 90,
+      maxResults: 5,
+      includeRawContent: true
     });
   } catch (err) {
     console.error('Tavily search failed:', err);
@@ -113,8 +119,8 @@ enrich.post('/', async (c) => {
     return c.json({
       success: true,
       company_name: companyName,
-      dossier: BULLET_LABELS.map((label) => `- **${label}:** Not found in public sources.`).join('\n'),
-      bullets: BULLET_LABELS.map((label) => ({ label, text: 'Not found in public sources.' })),
+      dossier: BULLET_LABELS.map((label) => `- **${label}:** Data stale. Dial main line to verify`).join('\n'),
+      bullets: BULLET_LABELS.map((label) => ({ label, text: 'Data stale. Dial main line to verify' })),
       sources: [],
       degraded: 'no_search_results'
     });
@@ -131,11 +137,15 @@ enrich.post('/', async (c) => {
   const industry = cleanCapped(body?.industry, LIMITS.industry);
   const recommendedProducts = getRecommendedProducts(industry);
 
+  const pipelineStage = cleanCapped(body?.pipeline_stage, 32) || 'PROSPECT';
+  const latestDisposition = cleanCapped(body?.latest_disposition, 60) || 'None';
+  const touchCount = asCount(body?.touch_count, 1000) ?? 0;
+
   let markdown;
   try {
-    markdown = await chatCompletion(c.env, {
-      model: c.env.OPENROUTER_ENRICH_MODEL || DEFAULT_MODELS.enrich,
-      system: buildEnrichSystemPrompt(recommendedProducts),
+    markdown = await generateDossier(c.env, {
+      model: c.env.OPENROUTER_ENRICH_MODEL || DEFAULT_MODELS.complex,
+      system: buildEnrichSystemPrompt(recommendedProducts, { pipelineStage, latestDisposition, touchCount }),
       user: context.slice(0, 14000),
       maxTokens: 500,
       temperature: 0.2

@@ -8,6 +8,48 @@
 
 ---
 
+## 2026-08-30 19:35 CDT — Pre-Call Intelligence Pipeline Optimization & Cross-Tab BroadcastChannel Synchronization (Agent: Antigravity)
+
+### Session Goal
+Execute massive, one-shot architectural refactor to overhaul the Pre-Call Intelligence pipeline (OpenRouter task-tier cost routing, strict 90-day Tavily search with raw content extraction, CRM context injection into target dossiers) and eradicate cross-tab "Tab Amnesia" through real-time state synchronization via the native `BroadcastChannel` API.
+
+### Execution Summary
+
+- **Phase 1: OpenRouter Semantic Routing & Cost Control (`src/lib/ai.js`, `src/routes/activity.js`)**
+  - `src/lib/ai.js`: Added `taskTier` parameter (`'simple'` vs `'complex'`) to `chatCompletion()`.
+  - Configured tiered model matrix:
+    - Simple Tier (`'simple'`): `deepseek/deepseek-v4-flash` / `z-ai/glm-5.3-flash` (or `OPENROUTER_SIMPLE_MODEL` / `OPENROUTER_STRUCTURE_MODEL` overrides) for voice structuring (`structureTranscript`) and industry categorization (`classifyIndustry`).
+    - Complex Tier (`'complex'`): `meta-llama/llama-3.3-70b-instruct` / `anthropic/claude-3.5-haiku` (or `OPENROUTER_COMPLEX_MODEL` / `OPENROUTER_ENRICH_MODEL` overrides) for pre-call target dossiers (`generateDossier`).
+  - Added and exported `generateDossier(env, opts)` enforcing `taskTier: 'complex'`.
+  - `src/routes/activity.js`: Updated `structureTranscript()` to pass `taskTier: 'simple'`.
+
+- **Phase 2: Strict Tavily Search Optimization (`src/routes/enrich.js`, `src/lib/ai.js`)**
+  - `src/routes/enrich.js`: Cleaned search query to strictly company name, city, and state (`[companyName, address || 'Springfield, MO'].filter(Boolean).join(', ')`), eliminating query dilution from hardcoded term appending.
+  - `src/lib/ai.js` & `src/routes/enrich.js`: Updated Tavily search parameters:
+    - `days: 90` to constrain search to recent local news, awards, and expansions.
+    - `include_raw_content: true` to provide full page context rather than brief snippets.
+    - `max_results: 5` to ensure adequate context depth.
+    - Content extraction maps `r.raw_content || r.content` up to 2500 characters per result.
+
+- **Phase 3: CRM Context Injection into Pre-Call Intelligence (`public/app/field.js`, `src/routes/enrich.js`)**
+  - `public/app/field.js`: Updated `initInspect()` to pass `pipeline_stage`, `latest_disposition`, and `touch_count` from `state.companies` or `state.selectedCompany` to `POST /api/enrich`.
+  - `src/routes/enrich.js`: Injected CRM context into the dossier LLM prompt:
+    `"Context: This prospect is currently in stage {pipeline_stage}. Previous disposition: {latest_disposition}. Total touches: {touch_count}."`
+  - Added strict high-contrast fallback directive: `"If specific Decision Maker (DM) names or exact headcounts are missing from the raw content, you must output a high-contrast directive: 'Data stale. Dial main line to verify'."`
+
+- **Phase 4: Real-Time Tab Synchronization via BroadcastChannel (`public/app/app.js`, `public/app/pipeline.js`, `public/app/store.js`, `public/app/desktop.js`, `public/app/field.js`)**
+  - `public/app/app.js`: Initialized global `window.syncChannel = new BroadcastChannel('aflac_sync')` with safe fallback.
+  - `public/app/pipeline.js`: Broadcasts `{ type: 'CRM_UPDATE', company_id, stage, disposition }` on Kanban stage change and snooze/un-snooze actions; listens for `CRM_UPDATE` to auto-refresh pipeline data.
+  - `public/app/store.js`: Broadcasts `CRM_UPDATE` on individual voice log upload and batched background sync drain.
+  - `public/app/desktop.js`: Added `data-company-id` to route target rows and listens on `window.syncChannel` to update in-memory targets and DOM stage indicators without full page refresh.
+  - `public/app/field.js`: Listens on `window.syncChannel` to update local company records, current selected company state, and re-renders territory map pins immediately.
+
+- **Phase 5: Dual Synchronization & Validation**
+  - `test/worker.test.js`: Added unit tests verifying semantic model tier routing (`chatCompletion`) and clean Tavily query construction + CRM context injection in `POST /api/enrich`.
+  - Unit Tests: **110/110 passed** cleanly (100% pass rate).
+
+---
+
 ## 2026-08-30 17:48 CDT — Fix: Malformed Company Payload & Voice Log Submission in Field View (Agent: Antigravity)
 
 ### Session Goal

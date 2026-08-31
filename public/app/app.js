@@ -9,6 +9,13 @@
  * native ES modules served straight from ./public.
  */
 
+// Initialize real-time cross-tab state synchronization
+if (typeof window !== 'undefined') {
+  window.syncChannel = typeof BroadcastChannel !== 'undefined'
+    ? new BroadcastChannel('aflac_sync')
+    : { postMessage: () => {}, addEventListener: () => {}, removeEventListener: () => {} };
+}
+
 import { initViewSwitcher, activateView, onViewOpen, isDesktop, apiFetch, apiPost } from './ui.js';
 import { initStore, initConnectivityWatch, onSynced } from './store.js';
 import { initFieldView } from './field.js';

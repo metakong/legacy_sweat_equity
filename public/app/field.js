@@ -708,13 +708,19 @@ function initInspect() {
 
     setButtonBusy(button, true, 'Scanning…');
     try {
+      const matched = (state.companies || []).find((c) => c.company_id === state.selectedCompanyId)
+        || state.selectedCompany
+        || {};
       const data = await apiPost('/api/enrich', {
         company_id: state.selectedCompanyId || undefined,
         company_name: company.company_name,
         street_1: company.street_1,
         city: company.city,
         state: company.state,
-        zip_code: company.zip_code
+        zip_code: company.zip_code,
+        pipeline_stage: matched.pipeline_stage || undefined,
+        latest_disposition: matched.latest_disposition || undefined,
+        touch_count: matched.touch_count !== undefined ? Number(matched.touch_count) : undefined
       });
       renderDossier(data);
       // Persist to IndexedDB for offline access in commercial parks
@@ -1166,6 +1172,28 @@ function initVoiceResultListener() {
   });
 }
 
+function initBroadcastSyncListener() {
+  if (typeof window === 'undefined' || !window.syncChannel?.addEventListener) return;
+  window.syncChannel.addEventListener('message', (e) => {
+    if (e.data?.type === 'CRM_UPDATE' && e.data.company_id) {
+      const { company_id, stage, disposition } = e.data;
+      const target = (state.companies || []).find((c) => c.company_id === company_id);
+      if (target) {
+        if (stage) target.pipeline_stage = stage;
+        if (disposition) target.latest_disposition = disposition;
+      }
+      if (state.selectedCompanyId === company_id && state.selectedCompany) {
+        if (stage) state.selectedCompany.pipeline_stage = stage;
+        if (disposition) state.selectedCompany.latest_disposition = disposition;
+      }
+      if (state.companies.length > 0) {
+        renderMapPins(state.companies);
+      }
+      updateScoreboard();
+    }
+  });
+}
+
 export function initFieldView() {
   initMap();
   initNearestAccount();
@@ -1177,6 +1205,7 @@ export function initFieldView() {
   initMic();
   initSave();
   initVoiceResultListener();
+  initBroadcastSyncListener();
   updateScoreboard();
 
   window.addEventListener('viewactivated', (event) => {

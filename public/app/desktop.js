@@ -370,6 +370,7 @@ function renderRouteTable() {
     });
 
     return el('tr', {
+      attrs: { 'data-company-id': target.company_id },
       children: [
         el('td', { className: 'col-check', children: [checkbox] }),
         td(target.company_name),
@@ -1430,6 +1431,26 @@ export function initDesktopViews() {
   initRouteTab();
   initDataManagementView();
   initEodTab();
+
+  if (typeof window !== 'undefined' && window.syncChannel?.addEventListener) {
+    window.syncChannel.addEventListener('message', (e) => {
+      if (e.data?.type === 'CRM_UPDATE' && e.data.company_id) {
+        const companyId = e.data.company_id;
+        const target = masterRouteTargets.find((t) => t.company_id === companyId);
+        if (target) {
+          if (e.data.stage) target.pipeline_stage = e.data.stage;
+          if (e.data.disposition) target.latest_disposition = e.data.disposition;
+        }
+        const row = document.querySelector(`tr[data-company-id="${companyId}"]`);
+        if (row) {
+          const pill = row.querySelector('.pill-epv, .pill-stage');
+          if (pill && e.data.stage) {
+            pill.title = `Stage: ${e.data.stage}`;
+          }
+        }
+      }
+    });
+  }
 
   // Each tab fetches on first open, not on page load — the field log must be
   // interactive immediately, even on a slow tethered connection.

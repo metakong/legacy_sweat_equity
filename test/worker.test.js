@@ -1170,6 +1170,115 @@ test('POST /api/transcribe-and-log processes FormData with missing CRM optionals
   }
 });
 
+test('chatCompletion routes semantic model tiers correctly', async () => {
+  const { chatCompletion, DEFAULT_MODELS } = await import('../src/lib/ai.js');
+  let capturedModel = null;
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url, opts) => {
+      if (typeof url === 'string' && url.includes('openrouter.ai')) {
+        const payload = JSON.parse(opts.body);
+        capturedModel = payload.model;
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'test response' } }]
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return originalFetch(url, opts);
+    };
+
+    // Test simple tier routing
+    await chatCompletion({ OPENROUTER_API_KEY: 'test-key' }, {
+      taskTier: 'simple',
+      system: 'sys',
+      user: 'usr'
+    });
+    assert.equal(capturedModel, DEFAULT_MODELS.simple);
+
+    // Test complex tier routing
+    await chatCompletion({ OPENROUTER_API_KEY: 'test-key' }, {
+      taskTier: 'complex',
+      system: 'sys',
+      user: 'usr'
+    });
+    assert.equal(capturedModel, DEFAULT_MODELS.complex);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('POST /api/enrich constructs clean search query and injects CRM context', async () => {
+  let capturedTavilyBody = null;
+  let capturedOpenRouterPrompt = null;
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.fetch = async (url, opts) => {
+      if (typeof url === 'string' && url.includes('tavily.com')) {
+        capturedTavilyBody = JSON.parse(opts.body);
+        return new Response(JSON.stringify({
+          answer: 'Acme Corp is a Springfield manufacturer.',
+          results: [{
+            title: 'Acme Corp Profile',
+            url: 'https://sbj.net/acme',
+            raw_content: 'Acme Corp has 45 employees and owner John Doe.'
+          }]
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (typeof url === 'string' && url.includes('openrouter.ai')) {
+        const payload = JSON.parse(opts.body);
+        capturedOpenRouterPrompt = payload.messages;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '- **Executives:** John Doe (Owner)\n- **Headcount:** 45 employees (clearly meets 3+ W-2 bar)\n- **Industry Hook:** Great target for voluntary disability coverage.'
+            }
+          }]
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return originalFetch(url, opts);
+    };
+
+    const res = await app.request('/api/enrich', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': 'LEGACY_EDGE_KEY_2026'
+      },
+      body: JSON.stringify({
+        company_name: 'Acme Industrial',
+        street_1: '100 Industrial Blvd',
+        city: 'Springfield',
+        state: 'MO',
+        pipeline_stage: 'QUALIFIED',
+        latest_disposition: 'Gatekeeper Blocked',
+        touch_count: 3
+      })
+    }, {
+      TAVILY_API_KEY: 'test-tavily-key',
+      OPENROUTER_API_KEY: 'test-openrouter-key'
+    });
+
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.success, true);
+    assert.equal(data.bullets.length, 3);
+
+    // Verify Tavily query has NO hardcoded appending
+    assert.equal(capturedTavilyBody.query, 'Acme Industrial, 100 Industrial Blvd, Springfield, MO');
+    assert.equal(capturedTavilyBody.days, 90);
+    assert.equal(capturedTavilyBody.include_raw_content, true);
+    assert.equal(capturedTavilyBody.max_results, 5);
+
+    // Verify CRM Context was injected into system prompt
+    const systemPrompt = capturedOpenRouterPrompt.find((m) => m.role === 'system')?.content || '';
+    assert.ok(systemPrompt.includes('Context: This prospect is currently in stage QUALIFIED. Previous disposition: Gatekeeper Blocked. Total touches: 3.'));
+    assert.ok(systemPrompt.includes("Data stale. Dial main line to verify"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
 
 
 

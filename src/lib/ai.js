@@ -29,6 +29,8 @@ const TAVILY_URL = 'https://api.tavily.com/search';
 // Verified against https://openrouter.ai/api/v1/models on 2026-08-29.
 export const DEFAULT_MODELS = {
   transcribe: 'whisper-large-v3-turbo',
+  simple: 'deepseek/deepseek-v4-flash',
+  complex: 'meta-llama/llama-3.3-70b-instruct',
   structure: 'anthropic/claude-haiku-4.5',
   enrich: 'meta-llama/llama-3.3-70b-instruct'
 };
@@ -88,20 +90,23 @@ export async function transcribeAudio(env, audio, filename = 'journal.webm') {
 }
 
 /**
- * One-shot chat completion through OpenRouter.
+ * One-shot chat completion through OpenRouter with semantic task tier routing.
  *
  * @param {object} env
  * @param {object} opts
- * @param {string} opts.model
+ * @param {string} [opts.model]
+ * @param {'simple'|'complex'} [opts.taskTier='simple']  routing tier
  * @param {string} opts.system
  * @param {string} opts.user
  * @param {boolean} [opts.json]  request a JSON object back
  * @param {number} [opts.maxTokens]
+ * @param {number} [opts.temperature]
  * @param {number} [opts.timeoutMs]
  * @returns {Promise<string>} the assistant message content
  */
 export async function chatCompletion(env, {
   model,
+  taskTier = 'simple',
   system,
   user,
   json = false,
@@ -113,8 +118,16 @@ export async function chatCompletion(env, {
     throw new ProviderError('openrouter', 503, 'OPENROUTER_API_KEY is not configured');
   }
 
+  // Model routing matrix based on taskTier:
+  // - simple: deepseek/deepseek-v4-flash or z-ai/glm-5.3-flash
+  // - complex: meta-llama/llama-3.3-70b-instruct or anthropic/claude-3.5-haiku
+  const resolvedModel = model
+    || (taskTier === 'complex'
+      ? (env.OPENROUTER_COMPLEX_MODEL || env.OPENROUTER_ENRICH_MODEL || DEFAULT_MODELS.complex)
+      : (env.OPENROUTER_SIMPLE_MODEL || env.OPENROUTER_STRUCTURE_MODEL || DEFAULT_MODELS.simple));
+
   const body = {
-    model,
+    model: resolvedModel,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user }
@@ -154,6 +167,26 @@ export async function chatJson(env, opts) {
 }
 
 /**
+ * Pre-call intelligence dossier synthesis (Complex Tier).
+ */
+export async function generateDossier(env, {
+  system,
+  user,
+  model,
+  maxTokens = 500,
+  temperature = 0.2
+} = {}) {
+  return chatCompletion(env, {
+    taskTier: 'complex',
+    model: model || env.OPENROUTER_ENRICH_MODEL || DEFAULT_MODELS.complex,
+    system,
+    user,
+    maxTokens,
+    temperature
+  });
+}
+
+/**
  * Tavily web search for the pre-call dossier.
  *
  * Auth is sent BOTH as a bearer header (current docs) and as `api_key` in the
@@ -161,10 +194,11 @@ export async function chatJson(env, opts) {
  * this keeps working across their auth migration.
  */
 export async function tavilySearch(env, query, {
-  maxResults = 6,
+  maxResults = 5,
   timeoutMs = 20_000,
   includeDomains = [],
-  days = undefined
+  days = 90,
+  includeRawContent = true
 } = {}) {
   if (!env.TAVILY_API_KEY) {
     throw new ProviderError('tavily', 503, 'TAVILY_API_KEY is not configured');
@@ -176,15 +210,13 @@ export async function tavilySearch(env, query, {
     search_depth: 'advanced',
     max_results: maxResults,
     include_answer: true,
-    include_raw_content: false
+    include_raw_content: includeRawContent,
+    days: days
   };
 
   // Boost specific domains without excluding others. Tavily treats these
   // as preference hints — results from other domains still appear.
   if (includeDomains.length > 0) body.include_domains = includeDomains;
-
-  // Restrict to results published within the last N days (e.g. 90).
-  // Sharpens the Industry Hook bullet toward recent expansions and news.
   if (typeof days === 'number' && days > 0) body.days = days;
 
   const res = await fetch(TAVILY_URL, {
@@ -208,7 +240,7 @@ export async function tavilySearch(env, query, {
       ? data.results.slice(0, maxResults).map((r) => ({
         title: String(r?.title ?? '').slice(0, 300),
         url: String(r?.url ?? '').slice(0, 500),
-        content: String(r?.content ?? '').slice(0, 1500)
+        content: String(r?.raw_content || r?.content || '').slice(0, 2500)
       }))
       : []
   };

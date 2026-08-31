@@ -208,6 +208,14 @@ export async function syncQueue() {
         const result = await uploadVoiceLog(entry);
         await remove(entry.log_id);
         drained += 1;
+        if (typeof window !== 'undefined' && window.syncChannel?.postMessage) {
+          window.syncChannel.postMessage({
+            type: 'CRM_UPDATE',
+            company_id: result.company_id || entry.company_id || entry.company?.company_id,
+            stage: result.stage || null,
+            disposition: result.disposition || entry.manual_disposition
+          });
+        }
         // The field view fills in the transcript if the agent is still looking
         // at the entry they just logged.
         window.dispatchEvent(new CustomEvent('voicelogged', { detail: result }));
@@ -242,6 +250,15 @@ export async function syncQueue() {
         for (const logId of result.accepted || []) {
           await remove(logId);
           drained += 1;
+          const matchedEntry = batch.find((e) => e.log_id === logId);
+          if (typeof window !== 'undefined' && window.syncChannel?.postMessage && matchedEntry) {
+            window.syncChannel.postMessage({
+              type: 'CRM_UPDATE',
+              company_id: matchedEntry.company_id || matchedEntry.company?.company_id,
+              stage: null,
+              disposition: matchedEntry.manual_disposition || matchedEntry.disposition
+            });
+          }
         }
         for (const rejection of result.rejected || []) {
           console.warn('Server rejected log:', rejection);

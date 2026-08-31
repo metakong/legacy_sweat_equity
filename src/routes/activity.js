@@ -130,7 +130,8 @@ Rules:
 async function structureTranscript(env, transcript, booleans) {
   const today = businessDate();
   const raw = await chatCompletion(env, {
-    model: env.OPENROUTER_STRUCTURE_MODEL || DEFAULT_MODELS.structure,
+    taskTier: 'simple',
+    model: env.OPENROUTER_STRUCTURE_MODEL || DEFAULT_MODELS.simple || DEFAULT_MODELS.structure,
     system: buildStructuringPrompt(today),
     user: [
       `Contact channel: ${booleans.is_in_person ? 'in person' : 'phone call'}`,

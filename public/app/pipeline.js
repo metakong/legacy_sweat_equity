@@ -231,6 +231,14 @@ function renderKanbanBoard() {
               reason: 'Stage moved via Kanban board'
             });
             company.pipeline_stage = newStage;
+            if (window.syncChannel?.postMessage) {
+              window.syncChannel.postMessage({
+                type: 'CRM_UPDATE',
+                company_id: company.company_id,
+                stage: newStage,
+                disposition: company.latest_disposition
+              });
+            }
             showToast(`Moved ${company.company_name} to ${newStage}`, 'success');
             renderPipeline();
           } catch (err) {
@@ -317,6 +325,14 @@ function initSnoozeDialog() {
           company_id: activeSnoozeCompanyId,
           until: null
         });
+        if (window.syncChannel?.postMessage) {
+          window.syncChannel.postMessage({
+            type: 'CRM_UPDATE',
+            company_id: activeSnoozeCompanyId,
+            stage: null,
+            disposition: null
+          });
+        }
         showToast('Snooze cleared.', 'success');
         dialog.close();
         await fetchPipelineData();
@@ -337,6 +353,14 @@ function initSnoozeDialog() {
         company_id: activeSnoozeCompanyId,
         until
       });
+      if (window.syncChannel?.postMessage) {
+        window.syncChannel.postMessage({
+          type: 'CRM_UPDATE',
+          company_id: activeSnoozeCompanyId,
+          stage: null,
+          disposition: null
+        });
+      }
       showToast(`Account snoozed until ${until}.`, 'success');
       dialog.close();
       await fetchPipelineData();
@@ -371,6 +395,14 @@ export function initPipelineView() {
 
   initSnoozeDialog();
   fetchPipelineData();
+
+  if (typeof window !== 'undefined' && window.syncChannel?.addEventListener) {
+    window.syncChannel.addEventListener('message', (e) => {
+      if (e.data?.type === 'CRM_UPDATE') {
+        fetchPipelineData();
+      }
+    });
+  }
 
   window.addEventListener('viewactivated', (e) => {
     if (e.detail?.view === 'pipeline') {
