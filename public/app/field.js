@@ -900,6 +900,16 @@ function initFunnelChips() {
         state.funnelOverride = funnelVal;
         $('derivedDisposition').textContent = funnelVal;
       }
+      
+      const apInput = $('projectedApInput');
+      if (apInput) {
+        if (state.funnelOverride === 'Enrolled' || state.funnelOverride === 'Presentation Scheduled') {
+          apInput.classList.remove('hidden');
+        } else {
+          apInput.classList.add('hidden');
+          apInput.value = '';
+        }
+      }
     });
   });
 }
@@ -1069,6 +1079,11 @@ function resetForm() {
   clearCompanySelection();
   state.funnelOverride = null;
   document.querySelectorAll('.funnel-chips .filter-chip').forEach((c) => c.classList.remove('active'));
+  const apInput = $('projectedApInput');
+  if (apInput) {
+    apInput.value = '';
+    apInput.classList.add('hidden');
+  }
   // Reset 3-tap binary toggles to defaults: In-Person · Initial · Gatekeeper.
   // Without this, door #N inherits door #(N-1)'s "DM Met" state and the
   // derived disposition silently reads "Follow-Up Scheduled" instead of the
@@ -1111,6 +1126,7 @@ function currentActivityPayload() {
     company,
     ...state.binary,
     manual_disposition: state.funnelOverride || undefined,
+    projected_ap: parseInt($('projectedApInput')?.value, 10) || undefined,
     timestamp: new Date().toISOString(),
     raw_audio_transcription: state.audioBlob ? undefined : (typedNote || undefined),
     audioBlob: state.audioBlob || undefined,

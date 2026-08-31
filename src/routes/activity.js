@@ -136,16 +136,17 @@ async function structureTranscript(env, transcript, booleans, previousContext = 
     `Reached: ${booleans.is_dm_contact ? 'the decision maker' : 'a gatekeeper or staff member'}`,
   ];
   
-  if (previousContext) {
-    userPrompt.push('', 'Previous history with this account:', previousContext);
-  }
-  
   userPrompt.push('', 'Field note transcript:', transcript);
+
+  let systemPrompt = buildStructuringPrompt(today);
+  if (previousContext) {
+    systemPrompt += `\n\nFor context, here are the agent's last two interactions with this company: ${previousContext}. Ensure your recommended next steps logically follow this history.`;
+  }
 
   const raw = await chatCompletion(env, {
     taskTier: 'simple',
     model: env.OPENROUTER_STRUCTURE_MODEL || DEFAULT_MODELS.simple || DEFAULT_MODELS.structure,
-    system: buildStructuringPrompt(today),
+    system: systemPrompt,
     user: userPrompt.join('\n'),
     json: true,
     maxTokens: 900
@@ -308,15 +309,7 @@ root.post('/transcribe-and-log', async (c) => {
         LIMIT 2
       `).bind(companyId).all();
       
-      const previousContext = recentTouches.results?.length ? recentTouches.results.map(t => {
-        let notes = '';
-        if (t.ai_structured_notes) {
-          try {
-             notes = JSON.stringify(parseJsonLoose(t.ai_structured_notes));
-          } catch { notes = String(t.ai_structured_notes); }
-        }
-        return `Touch on ${t.timestamp}: Disposition: ${t.disposition}. Notes: ${notes}`;
-      }).join('\n') : null;
+      const previousContext = recentTouches.results?.length ? JSON.stringify(recentTouches.results) : null;
 
       structured = await structureTranscript(c.env, transcript, booleans, previousContext);
       if (!structured) degraded = 'structuring_unparseable';

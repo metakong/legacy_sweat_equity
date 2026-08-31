@@ -32,8 +32,8 @@ export const dbReady = new Promise((resolve, reject) => {
   readyCallbacks.push({ resolve, reject });
 });
 
-export function initStore() {
-  requestPersistentStorage();
+export async function initStore() {
+  await requestPersistentStorage();
   
   // The retired roofing app's database is dead weight in the same origin.
   // Deleting it reclaims whatever queued door photos were left behind.
@@ -207,75 +207,67 @@ export async function syncQueue() {
     const entries = await readAll();
     if (entries.length === 0) return;
 
-    const withAudio = entries.filter((e) => e.audioBlob);
-    const plain = entries.filter((e) => !e.audioBlob);
+    entries.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
 
-    // Voice journals go one at a time — each is a multipart upload plus two
-    // model calls, and batching them would blow the request timeout.
-    for (const entry of withAudio) {
-      try {
-        const result = await uploadVoiceLog(entry);
-        await remove(entry.log_id);
-        drained += 1;
-        if (typeof window !== 'undefined' && window.syncChannel?.postMessage) {
-          window.syncChannel.postMessage({
-            type: 'CRM_UPDATE',
-            company_id: result.company_id || entry.company_id || entry.company?.company_id,
-            stage: result.stage || null,
-            disposition: result.disposition || entry.manual_disposition
-          });
-        }
-        // The field view fills in the transcript if the agent is still looking
-        // at the entry they just logged.
-        window.dispatchEvent(new CustomEvent('voicelogged', { detail: result }));
-        if (result.degraded && !result.transcript) {
-          showToast(`Logged "${entry.company?.company_name || 'activity'}" — transcription unavailable.`, 'info');
-        }
-      } catch (err) {
-        if (err.status >= 400 && err.status < 500) {
-          // The server will never accept this record. Retrying forever would
-          // wedge the queue behind it.
-          console.warn('Voice log rejected, discarding:', err.message);
-          showToast(`Could not sync a voice log — ${err.message}`, 'error');
+    for (const entry of entries) {
+      if (entry.audioBlob) {
+        try {
+          const result = await uploadVoiceLog(entry);
           await remove(entry.log_id);
-        } else {
-          console.error('Voice log sync failed, will retry:', err);
-        }
-      }
-    }
-
-    // Silent logs batch cleanly.
-    for (let i = 0; i < plain.length; i += 50) {
-      const batch = plain.slice(i, i + 50);
-      try {
-        const res = await fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ logs: batch.map(toSyncPayload) })
-        });
-        if (!res.ok) throw new Error(`Sync rejected (${res.status})`);
-        const result = await res.json();
-
-        for (const logId of result.accepted || []) {
-          await remove(logId);
           drained += 1;
-          const matchedEntry = batch.find((e) => e.log_id === logId);
-          if (typeof window !== 'undefined' && window.syncChannel?.postMessage && matchedEntry) {
+          if (typeof window !== 'undefined' && window.syncChannel?.postMessage) {
             window.syncChannel.postMessage({
               type: 'CRM_UPDATE',
-              company_id: matchedEntry.company_id || matchedEntry.company?.company_id,
-              stage: null,
-              disposition: matchedEntry.manual_disposition || matchedEntry.disposition
+              company_id: result.company_id || entry.company_id || entry.company?.company_id,
+              stage: result.stage || null,
+              disposition: result.disposition || entry.manual_disposition
             });
           }
+          window.dispatchEvent(new CustomEvent('voicelogged', { detail: result }));
+          if (result.degraded && !result.transcript) {
+            showToast(`Logged "${entry.company?.company_name || 'activity'}" — transcription unavailable.`, 'info');
+          }
+        } catch (err) {
+          if (err.status >= 400 && err.status < 500) {
+            console.warn('Voice log rejected, discarding:', err.message);
+            showToast(`Could not sync a voice log — ${err.message}`, 'error');
+            await remove(entry.log_id);
+          } else {
+            console.error('Voice log sync failed, will retry:', err);
+            break; // Stop syncing remaining to maintain chronological order
+          }
         }
-        for (const rejection of result.rejected || []) {
-          console.warn('Server rejected log:', rejection);
-          showToast(`Discarded an invalid entry — ${rejection.reason}`, 'error');
-          if (rejection.log_id) await remove(rejection.log_id);
+      } else {
+        try {
+          const res = await fetch('/api/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ logs: [toSyncPayload(entry)] })
+          });
+          if (!res.ok) throw new Error(`Sync rejected (${res.status})`);
+          const result = await res.json();
+
+          for (const logId of result.accepted || []) {
+            await remove(logId);
+            drained += 1;
+            if (typeof window !== 'undefined' && window.syncChannel?.postMessage) {
+              window.syncChannel.postMessage({
+                type: 'CRM_UPDATE',
+                company_id: entry.company_id || entry.company?.company_id,
+                stage: null,
+                disposition: entry.manual_disposition || entry.disposition
+              });
+            }
+          }
+          for (const rejection of result.rejected || []) {
+            console.warn('Server rejected log:', rejection);
+            showToast(`Discarded an invalid entry — ${rejection.reason}`, 'error');
+            if (rejection.log_id) await remove(rejection.log_id);
+          }
+        } catch (err) {
+          console.error('Batch sync failed, will retry:', err);
+          break; // Stop syncing remaining to maintain chronological order
         }
-      } catch (err) {
-        console.error('Batch sync failed, will retry:', err);
       }
     }
   } catch (err) {
