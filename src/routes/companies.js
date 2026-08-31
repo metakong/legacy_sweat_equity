@@ -229,6 +229,22 @@ export async function handleImport(c) {
     return c.json({ error: 'No companies to import' }, 400);
   }
 
+  // --- PRE-FLIGHT DEDUPLICATION ---
+  const existing = await c.env.DB.prepare('SELECT company_id, company_name, street_1, account_number FROM companies').all();
+  const normalizeKey = (n, s) => (String(n || '') + '|' + String(s || '')).toLowerCase().replace(/[^a-z0-9]/g, '');
+  
+  const exactMap = new Map();
+  const fuzzyMap = new Map();
+  
+  if (existing.results) {
+    for (const row of existing.results) {
+      if (row.account_number) exactMap.set(row.account_number, row.company_id);
+      if (row.company_name && row.street_1) {
+        fuzzyMap.set(normalizeKey(row.company_name, row.street_1), row.company_id);
+      }
+    }
+  }
+
   let imported = 0;
   let geocoded = 0;
   let contactCount = 0;
@@ -236,6 +252,16 @@ export async function handleImport(c) {
 
   for (const raw of rawCompanies) {
     try {
+      // 1. DEDUPLICATION
+      if (raw.account_number && exactMap.has(raw.account_number)) {
+        raw.company_id = exactMap.get(raw.account_number);
+      } else if (raw.company_name && raw.street_1) {
+        const fuzzyKey = normalizeKey(raw.company_name, raw.street_1);
+        if (fuzzyMap.has(fuzzyKey)) {
+          raw.company_id = fuzzyMap.get(fuzzyKey);
+        }
+      }
+
       // Auto-geocode if address is present and coordinates are missing
       if ((!raw?.lat || !raw?.long) && raw?.street_1) {
         const fullAddress = [raw.street_1, raw.city || 'Springfield', raw.state || 'MO', raw.zip_code]
