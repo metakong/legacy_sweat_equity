@@ -22,6 +22,8 @@ import { Hono } from 'hono';
 
 import {
   SECURITY_HEADERS,
+  extractUserEmail,
+  ALLOWED_USERS,
   CONTENT_SECURITY_POLICY,
   allowedOrigins,
   isHtmlResponse
@@ -94,13 +96,17 @@ app.use('/api/*', async (c, next) => {
     return next();
   }
 
-  const expectedKey = c.env?.API_KEY || 'LEGACY_EDGE_KEY_2026';
-  const apiKey = c.req.header('x-api-key');
-  const jwtAssertion = c.req.header('Cf-Access-Jwt-Assertion');
+  let email = extractUserEmail(c);
+  if (!email) {
+    const expectedKey = c.env?.API_KEY || 'LEGACY_EDGE_KEY_2026';
+    const apiKey = c.req.header('x-api-key');
+    if (apiKey === expectedKey) {
+      email = 'sean_deardorff@us.aflac.com';
+    }
+  }
 
-  if (jwtAssertion) {
-    return next();
-  } else if (apiKey === expectedKey) {
+  if (email && ALLOWED_USERS.includes(email)) {
+    c.set('userEmail', email);
     return next();
   } else {
     return c.json({ error: 'Unauthorized' }, 401);

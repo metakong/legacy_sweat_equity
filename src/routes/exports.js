@@ -39,17 +39,17 @@ const EXPORT_SELECT = `
     a.is_initial, a.is_dm_contact, a.presentation_date, a.enrollment_date,
     a.projected_ap, a.raw_audio_transcription, a.ai_structured_notes,
     a.sync_tier_status,
-    (SELECT COUNT(*) FROM activity_logs x WHERE x.company_id = co.company_id) AS touch_count
+    (SELECT COUNT(*) FROM activity_logs x WHERE x.company_id = co.company_id AND x.agent_email = co.agent_email) AS touch_count
   FROM companies co
   JOIN activity_logs a ON a.log_id = (
     SELECT log_id FROM activity_logs y
-    WHERE y.company_id = co.company_id
+    WHERE y.company_id = co.company_id AND y.agent_email = co.agent_email
     ORDER BY y.timestamp DESC LIMIT 1
   )
   LEFT JOIN contacts ct ON ct.contact_id = COALESCE(
     a.contact_id,
     (SELECT contact_id FROM contacts z
-     WHERE z.company_id = co.company_id
+     WHERE z.company_id = co.company_id AND z.agent_email = co.agent_email
      ORDER BY z.is_primary_dm DESC LIMIT 1)
   )
 `;
@@ -60,6 +60,7 @@ const EXPORT_SELECT = `
  *   ?sync_tier=       default PENDING — rows that have not moved to D365 yet
  */
 exports_.get('/d365', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   const url = new URL(c.req.url);
   const all = url.searchParams.get('all') === '1';
   const date = url.searchParams.get('date') || businessDate();
@@ -70,6 +71,9 @@ exports_.get('/d365', async (c) => {
 
   const where = [];
   const binds = [];
+
+  where.push('co.agent_email = ?');
+  binds.push(userEmail);
 
   if (!all) {
     const { start, end } = businessDayRangeUtc(date);

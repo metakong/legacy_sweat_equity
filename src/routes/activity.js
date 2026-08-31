@@ -197,6 +197,7 @@ async function structureTranscript(env, transcript, booleans, previousContext = 
  *   timestamp      (string)   optional ISO capture time (queued-offline case)
  */
 root.post('/transcribe-and-log', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   let form;
   try {
     form = await c.req.formData();
@@ -254,7 +255,7 @@ root.post('/transcribe-and-log', async (c) => {
           }
         }
         const company = normalizeCompany({ ...parsedCompany, company_id: companyId || parsedCompany.company_id || undefined });
-        await upsertCompany(c.env.DB, company);
+        await upsertCompany(c.env.DB, company, userEmail);
         companyId = company.company_id;
       }
     } catch (err) {
@@ -265,7 +266,7 @@ root.post('/transcribe-and-log', async (c) => {
   }
 
   if (!companyId) return c.json({ error: 'company_id or company payload is required' }, 400);
-  if (!(await companyExists(c.env.DB, companyId))) {
+  if (!(await companyExists(c.env.DB, companyId, userEmail))) {
     return c.json({ error: 'Unknown company_id' }, 400);
   }
 
@@ -304,10 +305,10 @@ root.post('/transcribe-and-log', async (c) => {
       const recentTouches = await c.env.DB.prepare(`
         SELECT timestamp, disposition, ai_structured_notes
         FROM activity_logs
-        WHERE company_id = ?
+        WHERE company_id = ? AND agent_email = ?
         ORDER BY timestamp DESC
         LIMIT 2
-      `).bind(companyId).all();
+      `).bind(companyId, userEmail).all();
       
       const previousContext = recentTouches.results?.length ? JSON.stringify(recentTouches.results) : null;
 
@@ -327,7 +328,7 @@ root.post('/transcribe-and-log', async (c) => {
     const contact = normalizeContact(structured.contact, companyId);
     if (contact) {
       contact.is_primary_dm = booleans.is_dm_contact;
-      contactId = await upsertContact(c.env.DB, contact);
+      contactId = await upsertContact(c.env.DB, contact, userEmail);
     }
   }
 
@@ -350,20 +351,20 @@ root.post('/transcribe-and-log', async (c) => {
     next_action_text: structured?.notes?.next_action
   });
 
-  await upsertActivityLog(c.env.DB, log);
+  await upsertActivityLog(c.env.DB, log, userEmail);
 
-  if (structured?.rating) await setCompanyRating(c.env.DB, companyId, structured.rating);
+  if (structured?.rating) await setCompanyRating(c.env.DB, companyId, structured.rating, userEmail);
 
   if (log.disposition === 'Enrolled') {
     const renewalDate = calculateRenewalDate(log.enrollment_date, log.timestamp?.slice(0, 10));
-    await setCompanyRenewalDate(c.env.DB, companyId, renewalDate);
+    await setCompanyRenewalDate(c.env.DB, companyId, renewalDate, userEmail);
   }
 
   // Auto-advance pipeline stage
   try {
     const targetStage = inferTargetPipelineStage(null, log.disposition, log.is_dm_contact);
     if (targetStage) {
-      await autoAdvancePipelineStage(c.env.DB, companyId, targetStage, log.log_id, `Auto-advanced on touch (${log.disposition})`);
+      await autoAdvancePipelineStage(c.env.DB, companyId, targetStage, log.log_id, `Auto-advanced on touch (${log.disposition})`, userEmail);
     }
   } catch (err) {
     console.error('Auto-advance pipeline stage failed (non-fatal):', err);
@@ -387,6 +388,7 @@ root.post('/transcribe-and-log', async (c) => {
 // POST /api/activity — a silent log (no voice journal)
 // ---------------------------------------------------------------------
 activity.post('/', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   let body;
   try {
     body = await c.req.json();
@@ -395,7 +397,7 @@ activity.post('/', async (c) => {
   }
 
   try {
-    const result = await writeQueuedLog(c.env, body);
+    const result = await writeQueuedLog(c.env, body, userEmail);
     return c.json({ success: true, ...result });
   } catch (err) {
     if (err instanceof ValidationError) return c.json({ error: err.message }, 400);
@@ -407,7 +409,7 @@ activity.post('/', async (c) => {
  * Write one queued entry: optional inline company + contact, then the log.
  * Shared by POST /api/activity and the /api/sync batch drain.
  */
-async function writeQueuedLog(env, entry) {
+async function writeQueuedLog(env, entry, userEmail) {
   let companyId = asId(entry?.company_id);
 
   if (entry?.company) {
@@ -441,18 +443,18 @@ async function writeQueuedLog(env, entry) {
         }
       }
       const company = normalizeCompany(companyPayload);
-      await upsertCompany(env.DB, company);
+      await upsertCompany(env.DB, company, userEmail);
       companyId = company.company_id;
     }
   }
 
   if (!companyId) throw new ValidationError('company_id or company payload is required');
-  if (!(await companyExists(env.DB, companyId))) throw new ValidationError('Unknown company_id');
+  if (!(await companyExists(env.DB, companyId, userEmail))) throw new ValidationError('Unknown company_id');
 
   let contactId = asId(entry?.contact_id);
   if (entry?.contact) {
     const contact = normalizeContact(entry.contact, companyId);
-    if (contact) contactId = await upsertContact(env.DB, contact);
+    if (contact) contactId = await upsertContact(env.DB, contact, userEmail);
   }
 
   const log = normalizeActivityLog({
@@ -461,20 +463,20 @@ async function writeQueuedLog(env, entry) {
     company_id: companyId,
     contact_id: contactId
   });
-  await upsertActivityLog(env.DB, log);
+  await upsertActivityLog(env.DB, log, userEmail);
 
-  if (entry?.rating) await setCompanyRating(env.DB, companyId, entry.rating);
+  if (entry?.rating) await setCompanyRating(env.DB, companyId, entry.rating, userEmail);
 
   if (log.disposition === 'Enrolled') {
     const renewalDate = calculateRenewalDate(log.enrollment_date, log.timestamp?.slice(0, 10));
-    await setCompanyRenewalDate(env.DB, companyId, renewalDate);
+    await setCompanyRenewalDate(env.DB, companyId, renewalDate, userEmail);
   }
 
   // Auto-advance pipeline stage
   try {
     const targetStage = inferTargetPipelineStage(null, log.disposition, log.is_dm_contact);
     if (targetStage) {
-      await autoAdvancePipelineStage(env.DB, companyId, targetStage, log.log_id, `Auto-advanced on touch (${log.disposition})`);
+      await autoAdvancePipelineStage(env.DB, companyId, targetStage, log.log_id, `Auto-advanced on touch (${log.disposition})`, userEmail);
     }
   } catch (err) {
     console.error('Auto-advance pipeline stage failed (non-fatal):', err);
@@ -495,6 +497,7 @@ async function writeQueuedLog(env, entry) {
  * drops any id listed in `rejected` instead of retrying it forever.
  */
 root.post('/sync', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   let payload;
   try {
     payload = await c.req.json();
@@ -513,7 +516,7 @@ root.post('/sync', async (c) => {
 
   for (const entry of logs) {
     try {
-      const result = await writeQueuedLog(c.env, entry);
+      const result = await writeQueuedLog(c.env, entry, userEmail);
       accepted.push(result.log_id);
     } catch (err) {
       const clientId = typeof entry?.log_id === 'string' ? entry.log_id.slice(0, 64) : null;
@@ -541,6 +544,7 @@ root.post('/sync', async (c) => {
  * Queries D1 activity_logs for the current Central business day.
  */
 root.get('/metrics/today', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   const today = businessDate();
   const { start, end } = businessDayRangeUtc(today);
 
@@ -558,8 +562,8 @@ root.get('/metrics/today', async (c) => {
         END
       ) AS next_steps
     FROM activity_logs
-    WHERE timestamp >= ? AND timestamp < ?
-  `).bind(start, end).first();
+    WHERE timestamp >= ? AND timestamp < ? AND agent_email = ?
+  `).bind(start, end, userEmail).first();
 
   return c.json({
     doors: Number(row?.doors || 0),
@@ -580,6 +584,7 @@ root.get('/metrics/today', async (c) => {
  *   ?limit=            1..500, default 200
  */
 activity.get('/', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   const url = new URL(c.req.url);
   const dateParam = url.searchParams.get('date');
   const all = url.searchParams.get('all') === '1';
@@ -591,6 +596,9 @@ activity.get('/', async (c) => {
 
   const where = [];
   const binds = [];
+
+  where.push('a.agent_email = ?');
+  binds.push(userEmail);
 
   if (!all) {
     // UTC bounds of the LOCAL day: a 6pm call in Springfield is already
@@ -633,6 +641,7 @@ activity.get('/', async (c) => {
  * handoff tabs stop re-offering rows that already moved to D365.
  */
 activity.post('/mark-synced', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   let body;
   try {
     body = await c.req.json();
@@ -654,8 +663,8 @@ activity.post('/mark-synced', async (c) => {
   // charset, but parameter binding is the thing that actually guarantees it.
   const placeholders = ids.map(() => '?').join(', ');
   await c.env.DB.prepare(
-    `UPDATE activity_logs SET sync_tier_status = ? WHERE log_id IN (${placeholders})`
-  ).bind(status, ...ids).run();
+    `UPDATE activity_logs SET sync_tier_status = ? WHERE log_id IN (${placeholders}) AND agent_email = ?`
+  ).bind(status, ...ids, userEmail).run();
 
   return c.json({ success: true, updated: ids.length, sync_tier_status: status });
 });

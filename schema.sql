@@ -27,7 +27,7 @@ DROP TABLE IF EXISTS canvassers;
 -- 1. COMPANIES — the prospect account (D365 Lead)
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS companies (
-    company_id TEXT PRIMARY KEY,
+    company_id TEXT,
     d365_lead_id TEXT,
     d365_checksum TEXT,
     d365_modified_on TEXT,
@@ -48,7 +48,9 @@ CREATE TABLE IF NOT EXISTS companies (
     disqualified_reason TEXT,
     forecast_ap REAL,
     forecast_confidence INTEGER,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    agent_email TEXT NOT NULL DEFAULT 'sean_deardorff@us.aflac.com',
+    PRIMARY KEY (company_id, agent_email)
 );
 
 -- ---------------------------------------------------------------------
@@ -56,12 +58,14 @@ CREATE TABLE IF NOT EXISTS companies (
 --    decision maker whose sign-off actually closes the case.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS contacts (
-    contact_id TEXT PRIMARY KEY,
+    contact_id TEXT,
     company_id TEXT NOT NULL,
     first_name TEXT, last_name TEXT, job_title TEXT,
     phone_number TEXT, email_address TEXT,
     is_primary_dm BOOLEAN DEFAULT 1,
-    FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE
+    agent_email TEXT NOT NULL DEFAULT 'sean_deardorff@us.aflac.com',
+    PRIMARY KEY (contact_id, agent_email),
+    FOREIGN KEY (company_id, agent_email) REFERENCES companies(company_id, agent_email) ON DELETE CASCADE
 );
 
 -- ---------------------------------------------------------------------
@@ -70,7 +74,7 @@ CREATE TABLE IF NOT EXISTS contacts (
 --    then refined by the voice-journal LLM pass.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS activity_logs (
-    log_id TEXT PRIMARY KEY,
+    log_id TEXT,
     company_id TEXT NOT NULL,
     contact_id TEXT,
     timestamp TEXT DEFAULT (datetime('now')),
@@ -84,7 +88,9 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     sync_tier_status TEXT DEFAULT 'PENDING',
     next_action_date TEXT,
     next_action_text TEXT,
-    FOREIGN KEY (company_id) REFERENCES companies(company_id)
+    agent_email TEXT NOT NULL DEFAULT 'sean_deardorff@us.aflac.com',
+    PRIMARY KEY (log_id, agent_email),
+    FOREIGN KEY (company_id, agent_email) REFERENCES companies(company_id, agent_email)
 );
 CREATE INDEX IF NOT EXISTS idx_companies_coords ON companies(lat, long);
 
@@ -126,14 +132,16 @@ CREATE INDEX IF NOT EXISTS idx_activity_next_action ON activity_logs(company_id,
 --    concrete pipeline movement stats.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS pipeline_events (
-    event_id TEXT PRIMARY KEY,
+    event_id TEXT,
     company_id TEXT NOT NULL,
     from_stage TEXT,
     to_stage TEXT NOT NULL,
     changed_at TEXT DEFAULT (datetime('now')),
     trigger_log_id TEXT,
     reason TEXT,
-    FOREIGN KEY (company_id) REFERENCES companies(company_id)
+    agent_email TEXT NOT NULL DEFAULT 'sean_deardorff@us.aflac.com',
+    PRIMARY KEY (event_id, agent_email),
+    FOREIGN KEY (company_id, agent_email) REFERENCES companies(company_id, agent_email)
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_company ON pipeline_events(company_id, changed_at);
 

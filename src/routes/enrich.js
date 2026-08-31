@@ -66,6 +66,7 @@ Hard rules:
  * Returns markdown bullets plus the sources they came from.
  */
 enrich.post('/', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   let body;
   try {
     body = await c.req.json();
@@ -179,8 +180,8 @@ enrich.post('/', async (c) => {
           employees   = COALESCE(?, employees),
           industry    = COALESCE(?, industry),
           lead_source = COALESCE(?, lead_source)
-        WHERE company_id = ?
-      `).bind(employees, industry, leadSource, companyId).run();
+        WHERE company_id = ? AND agent_email = ?
+      `).bind(employees, industry, leadSource, companyId, userEmail).run();
     }
   }
 

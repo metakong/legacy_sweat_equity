@@ -94,7 +94,7 @@ export function normalizeCompany(raw) {
  * only what the agent retyped, and must not blank out an enrichment result or
  * a D365 identity captured earlier.
  */
-export async function upsertCompany(db, company) {
+export async function upsertCompany(db, company, userEmail) {
   await db.prepare(`
     INSERT INTO companies (
       company_id, d365_lead_id, d365_checksum, d365_modified_on, company_name,
@@ -102,9 +102,9 @@ export async function upsertCompany(db, company) {
       lead_source, rating, employees, industry,
       sic_code, account_number, post_enrollment_date,
       renewal_date, pipeline_stage, stage_entered_at, snoozed_until,
-      disqualified_reason, forecast_ap, forecast_confidence, is_d365_synced
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(company_id) DO UPDATE SET
+      disqualified_reason, forecast_ap, forecast_confidence, is_d365_synced, agent_email
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(company_id, agent_email) DO UPDATE SET
       d365_lead_id        = COALESCE(excluded.d365_lead_id, companies.d365_lead_id),
       d365_checksum       = COALESCE(excluded.d365_checksum, companies.d365_checksum),
       d365_modified_on    = COALESCE(excluded.d365_modified_on, companies.d365_modified_on),
@@ -158,17 +158,18 @@ export async function upsertCompany(db, company) {
     company.disqualified_reason ?? null,
     company.forecast_ap ?? null,
     company.forecast_confidence ?? null,
-    company.is_d365_synced ?? 0
+    company.is_d365_synced ?? 0,
+    userEmail
   ).run();
 
   return company.company_id;
 }
 
 /** Move a company's D365 Rating without touching anything else. */
-export async function setCompanyRating(db, companyId, rating) {
+export async function setCompanyRating(db, companyId, rating, userEmail) {
   const canonical = matchEnum(rating, RATINGS);
   if (!canonical) return null;
-  await db.prepare('UPDATE companies SET rating = ? WHERE company_id = ?')
+  await db.prepare('UPDATE companies SET rating = ? WHERE company_id = ? AND agent_email = ?')
     .bind(canonical, companyId)
     .run();
   return canonical;
@@ -190,10 +191,10 @@ export function calculateRenewalDate(enrollmentDate, fallbackDate) {
 }
 
 /** Update a company's renewal date. */
-export async function setCompanyRenewalDate(db, companyId, renewalDate) {
+export async function setCompanyRenewalDate(db, companyId, renewalDate, userEmail) {
   const date = asIsoDate(renewalDate);
   if (!date || !companyId) return null;
-  await db.prepare('UPDATE companies SET renewal_date = ? WHERE company_id = ?')
+  await db.prepare('UPDATE companies SET renewal_date = ? WHERE company_id = ? AND agent_email = ?')
     .bind(date, companyId)
     .run();
   return date;
@@ -244,14 +245,14 @@ export function inferTargetPipelineStage(currentStage, disposition, isDmContact)
  * Update company pipeline stage and record an audit event in pipeline_events,
  * enforcing forward-only transitions (unless transitioning to a terminal state).
  */
-export async function autoAdvancePipelineStage(db, companyId, targetStage, logId = null, reason = 'Auto-inferred from field touch') {
+export async function autoAdvancePipelineStage(db, companyId, targetStage, userEmail, logId = null, reason = 'Auto-inferred from field touch') {
   if (!db || !companyId || !targetStage) return null;
   const canonicalStage = matchEnum(targetStage, PIPELINE_STAGES);
   if (!canonicalStage) return null;
 
   const current = await db.prepare(
-    'SELECT pipeline_stage FROM companies WHERE company_id = ? LIMIT 1'
-  ).bind(companyId).first();
+    'SELECT pipeline_stage FROM companies WHERE company_id = ? AND agent_email = ? AND agent_email = ? LIMIT 1'
+  ).bind(companyId, userEmail).first();
 
   if (!current) return null;
 
@@ -283,14 +284,14 @@ export async function autoAdvancePipelineStage(db, companyId, targetStage, logId
 /**
  * Explicit/manual pipeline state mutation endpoint helper.
  */
-export async function transitionPipelineStage(db, { companyId, toStage, reason = null, forecastAp = null, forecastConfidence = null }) {
+export async function transitionPipelineStage(db, { companyId, toStage, reason = null, forecastAp = null, forecastConfidence = null, triggerLogId = null, userEmail }) {
   const canonicalStage = matchEnum(toStage, PIPELINE_STAGES);
   if (!canonicalStage) throw new ValidationError(`Invalid pipeline stage. Must be one of: ${PIPELINE_STAGES.join(', ')}`);
   if (!companyId) throw new ValidationError('company_id is required');
 
   const current = await db.prepare(
-    'SELECT pipeline_stage, forecast_ap, forecast_confidence FROM companies WHERE company_id = ? LIMIT 1'
-  ).bind(companyId).first();
+    'SELECT pipeline_stage, forecast_ap, forecast_confidence FROM companies WHERE company_id = ? AND agent_email = ? LIMIT 1'
+  ).bind(companyId, userEmail).first();
 
   if (!current) throw new ValidationError('Company not found');
 
@@ -336,15 +337,15 @@ export async function transitionPipelineStage(db, { companyId, toStage, reason =
 /**
  * Snooze a company until a given date. Passing null or empty string un-snoozes.
  */
-export async function snoozeCompany(db, companyId, untilDate) {
+export async function snoozeCompany(db, companyId, untilDate, userEmail) {
   if (!companyId) throw new ValidationError('company_id is required');
   const until = untilDate ? asIsoDate(untilDate) : null;
   if (untilDate && !until) throw new ValidationError('Invalid date format for until (YYYY-MM-DD expected)');
 
-  const exists = await db.prepare('SELECT company_id FROM companies WHERE company_id = ? LIMIT 1').bind(companyId).first();
+  const exists = await db.prepare('SELECT company_id FROM companies WHERE company_id = ? LIMIT 1').bind(companyId, userEmail).first();
   if (!exists) throw new ValidationError('Company not found');
 
-  await db.prepare('UPDATE companies SET snoozed_until = ? WHERE company_id = ?').bind(until, companyId).run();
+  await db.prepare('UPDATE companies SET snoozed_until = ? WHERE company_id = ? AND agent_email = ?').bind(until, companyId).run();
   return { company_id: companyId, snoozed_until: until };
 }
 
@@ -378,7 +379,7 @@ export function normalizeContact(raw, companyId) {
   };
 }
 
-export async function findExistingContact(db, companyId, firstName, lastName) {
+export async function findExistingContact(db, companyId, firstName, lastName, userEmail) {
   if (!db || !companyId || (!firstName && !lastName)) return null;
   const fn = firstName ? firstName.trim().toLowerCase() : '';
   const ln = lastName ? lastName.trim().toLowerCase() : '';
@@ -386,33 +387,33 @@ export async function findExistingContact(db, companyId, firstName, lastName) {
   if (fn && ln) {
     const row = await db.prepare(`
       SELECT contact_id FROM contacts
-      WHERE company_id = ? AND LOWER(TRIM(first_name)) = ? AND LOWER(TRIM(last_name)) = ?
+      WHERE company_id = ? AND agent_email = ? AND LOWER(TRIM(first_name)) = ? AND LOWER(TRIM(last_name)) = ?
       LIMIT 1
-    `).bind(companyId, fn, ln).first();
+    `).bind(companyId, userEmail, fn, ln).first();
     if (row?.contact_id) return row.contact_id;
   } else if (fn) {
     const row = await db.prepare(`
       SELECT contact_id FROM contacts
-      WHERE company_id = ? AND LOWER(TRIM(first_name)) = ? AND (last_name IS NULL OR TRIM(last_name) = '')
+      WHERE company_id = ? AND agent_email = ? AND LOWER(TRIM(first_name)) = ? AND (last_name IS NULL OR TRIM(last_name) = '')
       LIMIT 1
-    `).bind(companyId, fn).first();
+    `).bind(companyId, userEmail, fn).first();
     if (row?.contact_id) return row.contact_id;
   } else if (ln) {
     const row = await db.prepare(`
       SELECT contact_id FROM contacts
-      WHERE company_id = ? AND (first_name IS NULL OR TRIM(first_name) = '') AND LOWER(TRIM(last_name)) = ?
+      WHERE company_id = ? AND agent_email = ? AND (first_name IS NULL OR TRIM(first_name) = '') AND LOWER(TRIM(last_name)) = ?
       LIMIT 1
-    `).bind(companyId, ln).first();
+    `).bind(companyId, userEmail, ln).first();
     if (row?.contact_id) return row.contact_id;
   }
   return null;
 }
 
-export async function upsertContact(db, contact) {
+export async function upsertContact(db, contact, userEmail) {
   // Composite key deduplication: if this contact already exists under the company,
   // reuse its contact_id so the write updates rather than duplicates.
   if (contact.company_id && (contact.first_name || contact.last_name)) {
-    const existingId = await findExistingContact(db, contact.company_id, contact.first_name, contact.last_name);
+    const existingId = await findExistingContact(db, contact.company_id, contact.first_name, contact.last_name, userEmail);
     if (existingId) {
       contact.contact_id = existingId;
     }
@@ -421,9 +422,9 @@ export async function upsertContact(db, contact) {
   await db.prepare(`
     INSERT INTO contacts (
       contact_id, company_id, first_name, last_name, job_title,
-      phone_number, email_address, is_primary_dm
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(contact_id) DO UPDATE SET
+      phone_number, email_address, is_primary_dm, agent_email
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(contact_id, agent_email) DO UPDATE SET
       first_name    = COALESCE(excluded.first_name, contacts.first_name),
       last_name     = COALESCE(excluded.last_name, contacts.last_name),
       job_title     = COALESCE(excluded.job_title, contacts.job_title),
@@ -438,7 +439,8 @@ export async function upsertContact(db, contact) {
     contact.job_title ?? null,
     contact.phone_number ?? null,
     contact.email_address ?? null,
-    contact.is_primary_dm ?? 0
+    contact.is_primary_dm ?? 0,
+    userEmail
   ).run();
 
   return contact.contact_id;
@@ -493,16 +495,16 @@ export function normalizeActivityLog(raw) {
  * Idempotent by log_id: the offline queue retries the same client-generated id
  * after a dropped connection, and that must update rather than duplicate.
  */
-export async function upsertActivityLog(db, log) {
+export async function upsertActivityLog(db, log, userEmail) {
   await db.prepare(`
     INSERT INTO activity_logs (
       log_id, company_id, contact_id, timestamp,
       is_in_person, is_initial, is_dm_contact, disposition,
       presentation_date, enrollment_date, projected_ap,
       raw_audio_transcription, ai_structured_notes, sync_tier_status,
-      next_action_date, next_action_text
-    ) VALUES (?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(log_id) DO UPDATE SET
+      next_action_date, next_action_text, agent_email
+    ) VALUES (?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(log_id, agent_email) DO UPDATE SET
       contact_id              = COALESCE(excluded.contact_id, activity_logs.contact_id),
       is_in_person            = excluded.is_in_person,
       is_initial              = excluded.is_initial,
@@ -532,15 +534,16 @@ export async function upsertActivityLog(db, log) {
     log.ai_structured_notes ?? null,
     log.sync_tier_status || 'PENDING',
     log.next_action_date ?? null,
-    log.next_action_text ?? null
+    log.next_action_text ?? null,
+    userEmail
   ).run();
 
   return log.log_id;
 }
 
 /** True when the FK target exists. Checked up front so we can 400, not 500. */
-export async function companyExists(db, companyId) {
-  const row = await db.prepare('SELECT 1 AS ok FROM companies WHERE company_id = ? LIMIT 1')
+export async function companyExists(db, companyId, userEmail) {
+  const row = await db.prepare('SELECT 1 AS ok FROM companies WHERE company_id = ? AND agent_email = ? LIMIT 1')
     .bind(companyId)
     .first();
   return Boolean(row);

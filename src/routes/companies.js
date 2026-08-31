@@ -35,6 +35,7 @@ const companies = new Hono();
  *   ?limit=      1..1000, default 50
  */
 companies.get('/', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   const url = new URL(c.req.url);
   const q = (url.searchParams.get('q') || '').slice(0, LIMITS.searchQuery).trim();
   const filter = url.searchParams.get('filter');
@@ -45,6 +46,9 @@ companies.get('/', async (c) => {
 
   const where = [];
   const binds = [];
+
+  where.push('co.agent_email = ?');
+  binds.push(userEmail);
 
   if (q.length >= 2) {
     where.push('(co.company_name LIKE ? ESCAPE \'\\\' OR co.street_1 LIKE ? ESCAPE \'\\\')');
@@ -66,20 +70,20 @@ companies.get('/', async (c) => {
   const isEnrolledRenewalActive = `(co.renewal_date IS NOT NULL AND co.renewal_date >= '${minus35}' AND co.renewal_date <= date('${todayLocal}', '+35 days'))`;
 
   if (untouched) {
-    where.push('NOT EXISTS (SELECT 1 FROM activity_logs a WHERE a.company_id = co.company_id)');
+    where.push('NOT EXISTS (SELECT 1 FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email)');
   } else if (filter === 'follow_ups') {
     // Has touches, but latest touch is active (or enrolled within the 35-day renewal window)
     where.push(`
-      EXISTS (SELECT 1 FROM activity_logs a WHERE a.company_id = co.company_id)
+      EXISTS (SELECT 1 FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email)
       AND (
         SELECT a.disposition FROM activity_logs a
-        WHERE a.company_id = co.company_id
+        WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email
         ORDER BY a.timestamp DESC LIMIT 1
       ) NOT IN (${terminalDispositions})
       AND (
         (
           SELECT a.disposition FROM activity_logs a
-          WHERE a.company_id = co.company_id
+          WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email
           ORDER BY a.timestamp DESC LIMIT 1
         ) NOT IN ('Enrolled', 'enrolled')
         OR ${isEnrolledRenewalActive}
@@ -89,17 +93,17 @@ companies.get('/', async (c) => {
     // Either untouched or latest disposition is active
     where.push(`
       (
-        NOT EXISTS (SELECT 1 FROM activity_logs a WHERE a.company_id = co.company_id)
+        NOT EXISTS (SELECT 1 FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email)
         OR (
           (
             SELECT a.disposition FROM activity_logs a
-            WHERE a.company_id = co.company_id
+            WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email
             ORDER BY a.timestamp DESC LIMIT 1
           ) NOT IN (${terminalDispositions})
           AND (
             (
               SELECT a.disposition FROM activity_logs a
-              WHERE a.company_id = co.company_id
+              WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email
               ORDER BY a.timestamp DESC LIMIT 1
             ) NOT IN ('Enrolled', 'enrolled')
             OR ${isEnrolledRenewalActive}
@@ -113,16 +117,16 @@ companies.get('/', async (c) => {
     SELECT co.company_id, co.company_name, co.street_1, co.street_2, co.city, co.state,
            co.zip_code, co.lat, co.long, co.lead_source, co.rating, co.employees,
            co.industry, co.d365_lead_id, co.is_d365_synced, co.renewal_date, co.created_at,
-           (SELECT COUNT(*) FROM activity_logs a WHERE a.company_id = co.company_id) AS touch_count,
-           (SELECT MAX(a.timestamp) FROM activity_logs a WHERE a.company_id = co.company_id) AS last_touched,
-           (SELECT a.disposition FROM activity_logs a WHERE a.company_id = co.company_id ORDER BY a.timestamp DESC LIMIT 1) AS latest_disposition,
-           (SELECT json_extract(a.ai_structured_notes, '$.next_action') FROM activity_logs a WHERE a.company_id = co.company_id AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_next_action,
-           (SELECT json_extract(a.ai_structured_notes, '$.product_interests') FROM activity_logs a WHERE a.company_id = co.company_id AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_product_interests,
-           (SELECT json_extract(a.ai_structured_notes, '$.objections') FROM activity_logs a WHERE a.company_id = co.company_id AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_objections,
+           (SELECT COUNT(*) FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email) AS touch_count,
+           (SELECT MAX(a.timestamp) FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email) AS last_touched,
+           (SELECT a.disposition FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email ORDER BY a.timestamp DESC LIMIT 1) AS latest_disposition,
+           (SELECT json_extract(a.ai_structured_notes, '$.next_action') FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_next_action,
+           (SELECT json_extract(a.ai_structured_notes, '$.product_interests') FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_product_interests,
+           (SELECT json_extract(a.ai_structured_notes, '$.objections') FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email AND a.ai_structured_notes IS NOT NULL ORDER BY a.timestamp DESC LIMIT 1) AS latest_objections,
            CASE
              WHEN (
                SELECT a.disposition FROM activity_logs a
-               WHERE a.company_id = co.company_id
+               WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email
                ORDER BY a.timestamp DESC LIMIT 1
              ) IN ('Enrolled', 'enrolled')
              AND ${isEnrolledRenewalActive}
@@ -131,7 +135,7 @@ companies.get('/', async (c) => {
            END AS is_renewal_active
     FROM companies co
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-    ORDER BY (SELECT COUNT(*) FROM activity_logs a LEFT JOIN companies c ON a.company_id = c.company_id WHERE a.company_id = co.company_id AND a.timestamp >= date(?, '-7 days')) DESC, co.company_name COLLATE NOCASE
+    ORDER BY (SELECT COUNT(*) FROM activity_logs a LEFT JOIN companies c ON a.company_id = c.company_id WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email AND a.timestamp >= date(?, '-7 days')) DESC, co.company_name COLLATE NOCASE
     LIMIT ?
   `;
 
@@ -141,6 +145,7 @@ companies.get('/', async (c) => {
 
 /** POST /api/companies — create or merge one account with auto-geocoding. */
 companies.post('/', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   let body;
   try {
     body = await c.req.json();
@@ -168,7 +173,7 @@ companies.post('/', async (c) => {
     throw err;
   }
 
-  await upsertCompany(c.env.DB, company);
+  await upsertCompany(c.env.DB, company, userEmail);
 
   // A company created from the field usually arrives with the one person the
   // agent actually spoke to attached.
@@ -176,7 +181,7 @@ companies.post('/', async (c) => {
   const rawContacts = Array.isArray(body?.contacts) ? body.contacts.slice(0, 10) : [];
   for (const rawContact of rawContacts) {
     const contact = normalizeContact(rawContact, company.company_id);
-    if (contact) contactIds.push(await upsertContact(c.env.DB, contact));
+    if (contact) contactIds.push(await upsertContact(c.env.DB, contact, userEmail));
   }
 
   return c.json({ success: true, company_id: company.company_id, contact_ids: contactIds });
@@ -184,26 +189,27 @@ companies.post('/', async (c) => {
 
 /** GET /api/companies/:id — account detail with contacts and full timeline. */
 companies.get('/:id', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   const companyId = asId(c.req.param('id'));
   if (!companyId) return c.json({ error: 'Invalid company id' }, 400);
 
   const company = await c.env.DB
-    .prepare('SELECT * FROM companies WHERE company_id = ? LIMIT 1')
-    .bind(companyId)
+    .prepare('SELECT * FROM companies WHERE company_id = ? AND agent_email = ? LIMIT 1')
+    .bind(companyId, userEmail)
     .first();
 
   if (!company) return c.json({ error: 'Company not found' }, 404);
 
   const [{ results: contacts }, { results: activity }] = await Promise.all([
     c.env.DB.prepare(
-      'SELECT * FROM contacts WHERE company_id = ? ORDER BY is_primary_dm DESC, last_name COLLATE NOCASE'
-    ).bind(companyId).all(),
+      'SELECT * FROM contacts WHERE company_id = ? AND agent_email = ? ORDER BY is_primary_dm DESC, last_name COLLATE NOCASE'
+    ).bind(companyId, userEmail).all(),
     c.env.DB.prepare(
       `SELECT log_id, contact_id, timestamp, is_in_person, is_initial, is_dm_contact,
               disposition, presentation_date, enrollment_date, projected_ap,
               raw_audio_transcription, ai_structured_notes, sync_tier_status
-       FROM activity_logs WHERE company_id = ? ORDER BY timestamp DESC LIMIT 50`
-    ).bind(companyId).all()
+       FROM activity_logs WHERE company_id = ? AND agent_email = ? ORDER BY timestamp DESC LIMIT 50`
+    ).bind(companyId, userEmail).all()
   ]);
 
   return c.json(
@@ -217,6 +223,7 @@ companies.get('/:id', async (c) => {
  * Shared import handler for batched company + contact ingestion with auto-geocoding.
  */
 export async function handleImport(c) {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   let body;
   try {
     body = await c.req.json();
@@ -230,7 +237,7 @@ export async function handleImport(c) {
   }
 
   // --- PRE-FLIGHT DEDUPLICATION ---
-  const existing = await c.env.DB.prepare('SELECT company_id, company_name, street_1, account_number FROM companies').all();
+  const existing = await c.env.DB.prepare('SELECT company_id, company_name, street_1, account_number FROM companies WHERE agent_email = ?').bind(userEmail).all();
   const normalizeKey = (n, s) => (String(n || '') + '|' + String(s || '')).toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
   
   const exactMap = new Map();
@@ -292,7 +299,7 @@ export async function handleImport(c) {
       }
 
       const company = normalizeCompany(raw);
-      await upsertCompany(c.env.DB, company);
+      await upsertCompany(c.env.DB, company, userEmail);
       imported += 1;
 
       // Insert nested contacts
@@ -300,7 +307,7 @@ export async function handleImport(c) {
       for (const rawContact of rawContacts) {
         const contact = normalizeContact(rawContact, company.company_id);
         if (contact) {
-          await upsertContact(c.env.DB, contact);
+          await upsertContact(c.env.DB, contact, userEmail);
           contactCount += 1;
         }
       }
@@ -337,6 +344,7 @@ export const contacts = new Hono();
 
 /** POST /api/contacts — attach or update a person on an account. */
 contacts.post('/', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   let body;
   try {
     body = await c.req.json();
@@ -353,7 +361,7 @@ contacts.post('/', async (c) => {
   }
   if (!contact) return c.json({ error: 'Contact needs at least a name or a job title' }, 400);
 
-  await upsertContact(c.env.DB, contact);
+  await upsertContact(c.env.DB, contact, userEmail);
   return c.json({ success: true, contact_id: contact.contact_id });
 });
 

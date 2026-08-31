@@ -577,7 +577,7 @@ test('classifyIndustry handles OpenRouter mock response and network fallback', a
               content: JSON.stringify({ category: 'Manufacturing' })
             }
           }]
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }), { status: 200, headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026', 'Content-Type': 'application/json' } });
       }
       return originalFetch(url, opts);
     };
@@ -662,7 +662,7 @@ test('findExistingContact and upsertContact deduplicate contacts on company_id a
           return {
             async first() {
               if (sql.includes('SELECT contact_id FROM contacts')) {
-                const [companyId, fn, ln] = args;
+                const [companyId, userEmail, fn, ln] = args;
                 for (const [id, c] of storedContacts.entries()) {
                   if (c.company_id === companyId &&
                       (c.first_name || '').toLowerCase() === (fn || '').toLowerCase() &&
@@ -702,7 +702,7 @@ test('findExistingContact and upsertContact deduplicate contacts on company_id a
     email_address: 'john@example.com',
     is_primary_dm: 1
   };
-  const id1 = await upsertContact(mockDb, contact1);
+  const id1 = await upsertContact(mockDb, contact1, 'sean_deardorff@us.aflac.com');
   assert.equal(id1, 'contact-uuid-1');
   assert.equal(storedContacts.size, 1);
 
@@ -717,7 +717,7 @@ test('findExistingContact and upsertContact deduplicate contacts on company_id a
     email_address: 'jdoe@example.com',
     is_primary_dm: 1
   };
-  const id2 = await upsertContact(mockDb, contact2);
+  const id2 = await upsertContact(mockDb, contact2, 'sean_deardorff@us.aflac.com');
   assert.equal(id2, 'contact-uuid-1', 'Should reuse existing contact_id rather than duplicating');
   assert.equal(storedContacts.size, 1, 'Total contact count should remain 1');
 });
@@ -911,7 +911,7 @@ test('autoAdvancePipelineStage advances stage and records pipeline_events audit 
     }
   };
 
-  const res = await autoAdvancePipelineStage(mockDb, 'comp-101', 'ENGAGED', 'log-999', 'First contact');
+  const res = await autoAdvancePipelineStage(mockDb, 'comp-101', 'ENGAGED', 'sean_deardorff@us.aflac.com', 'log-999', 'First contact');
   assert.ok(res);
   assert.equal(res.from_stage, 'PROSPECT');
   assert.equal(res.to_stage, 'ENGAGED');
@@ -963,13 +963,13 @@ test('transitionPipelineStage and snoozeCompany mutate state and validate inputs
   };
 
   // Stage transition
-  const stageRes = await transitionPipelineStage(mockDb, {
+  const stageRes = await transitionPipelineStage(mockDb, { 
     companyId: 'comp-101',
     toStage: 'PROPOSAL',
     reason: 'Executive agreed to quote',
     forecastAp: '$4,200',
     forecastConfidence: 75
-  });
+  , userEmail: 'sean_deardorff@us.aflac.com' });
 
   assert.equal(stageRes.to_stage, 'PROPOSAL');
   assert.equal(stageRes.from_stage, 'ENGAGED');
@@ -979,7 +979,7 @@ test('transitionPipelineStage and snoozeCompany mutate state and validate inputs
   assert.equal(auditEvent.to_stage, 'PROPOSAL');
 
   // Snooze
-  const snoozeRes = await snoozeCompany(mockDb, 'comp-101', '2026-09-15');
+  const snoozeRes = await snoozeCompany(mockDb, 'comp-101', '2026-09-15', 'sean_deardorff@us.aflac.com');
   assert.equal(snoozeRes.snoozed_until, '2026-09-15');
   assert.equal(updatedCompany.snoozed_until, '2026-09-15');
 });
@@ -1018,8 +1018,7 @@ test('/api/pipeline endpoints require x-api-key authentication', async () => {
   // Valid API key -> 200 with pipeline payload
   const authRes = await app.request('/api/pipeline', {
     method: 'GET',
-    headers: {
-      'x-api-key': 'LEGACY_EDGE_KEY_2026'
+    headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026'
     }
   }, { DB: mockDb });
 
@@ -1058,7 +1057,7 @@ test('POST /api/pipeline/stage and /api/pipeline/snooze process valid JSON mutat
   // POST /api/pipeline/stage
   const stageRes = await app.request('/api/pipeline/stage', {
     method: 'POST',
-    headers: {
+    headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026',
       'Content-Type': 'application/json',
       'x-api-key': 'LEGACY_EDGE_KEY_2026'
     },
@@ -1078,7 +1077,7 @@ test('POST /api/pipeline/stage and /api/pipeline/snooze process valid JSON mutat
   // POST /api/pipeline/snooze
   const snoozeRes = await app.request('/api/pipeline/snooze', {
     method: 'POST',
-    headers: {
+    headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026',
       'Content-Type': 'application/json',
       'x-api-key': 'LEGACY_EDGE_KEY_2026'
     },
@@ -1142,8 +1141,7 @@ test('POST /api/transcribe-and-log processes FormData with missing CRM optionals
 
   const res = await app.request('/api/transcribe-and-log', {
     method: 'POST',
-    headers: {
-      'x-api-key': 'LEGACY_EDGE_KEY_2026'
+    headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026'
     },
     body: form
   }, {
@@ -1181,7 +1179,7 @@ test('chatCompletion routes semantic model tiers correctly', async () => {
         capturedModel = payload.model;
         return new Response(JSON.stringify({
           choices: [{ message: { content: 'test response' } }]
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }), { status: 200, headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026', 'Content-Type': 'application/json' } });
       }
       return originalFetch(url, opts);
     };
@@ -1222,7 +1220,7 @@ test('POST /api/enrich constructs clean search query and injects CRM context', a
             url: 'https://sbj.net/acme',
             raw_content: 'Acme Corp has 45 employees and owner John Doe.'
           }]
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }), { status: 200, headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026', 'Content-Type': 'application/json' } });
       }
       if (typeof url === 'string' && url.includes('openrouter.ai')) {
         const payload = JSON.parse(opts.body);
@@ -1233,14 +1231,14 @@ test('POST /api/enrich constructs clean search query and injects CRM context', a
               content: '- **Executives:** John Doe (Owner)\n- **Headcount:** 45 employees (clearly meets 3+ W-2 bar)\n- **Industry Hook:** Great target for voluntary disability coverage.'
             }
           }]
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }), { status: 200, headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026', 'Content-Type': 'application/json' } });
       }
       return originalFetch(url, opts);
     };
 
     const res = await app.request('/api/enrich', {
       method: 'POST',
-      headers: {
+      headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026',
         'Content-Type': 'application/json',
         'x-api-key': 'LEGACY_EDGE_KEY_2026'
       },

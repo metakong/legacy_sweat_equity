@@ -31,6 +31,7 @@ const pipeline = new Hono();
  *   ?limit=              1..1000, default 500
  */
 pipeline.get('/', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   const url = new URL(c.req.url);
   const stageParam = url.searchParams.get('stage');
   const stage = stageParam ? matchEnum(stageParam, PIPELINE_STAGES) : null;
@@ -42,6 +43,9 @@ pipeline.get('/', async (c) => {
 
   const where = [];
   const binds = [today, today]; // For julianday days_in_stage calculation
+
+  where.push('c.agent_email = ?');
+  binds.push(userEmail);
 
   if (!includeSnoozed) {
     where.push('(c.snoozed_until IS NULL OR c.snoozed_until <= ?)');
@@ -67,6 +71,7 @@ pipeline.get('/', async (c) => {
         a.ai_structured_notes,
         ROW_NUMBER() OVER (PARTITION BY a.company_id ORDER BY a.timestamp DESC) AS rn
       FROM activity_logs a
+      WHERE a.agent_email = '${userEmail}'
     ),
     agg AS (
       SELECT
@@ -74,6 +79,7 @@ pipeline.get('/', async (c) => {
         COUNT(*) AS touch_count,
         MAX(timestamp) AS last_touched
       FROM activity_logs
+      WHERE agent_email = '${userEmail}'
       GROUP BY company_id
     )
     SELECT
@@ -129,6 +135,7 @@ pipeline.get('/', async (c) => {
  * Body: { company_id, to_stage, reason?, forecast_ap?, forecast_confidence? }
  */
 pipeline.post('/stage', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   let body;
   try {
     body = await c.req.json();
@@ -153,7 +160,7 @@ pipeline.post('/stage', async (c) => {
       reason: body?.reason,
       forecastAp: body?.forecast_ap,
       forecastConfidence: body?.forecast_confidence
-    });
+    }, userEmail);
     return c.json({ success: true, ...result });
   } catch (err) {
     if (err instanceof ValidationError) {
@@ -168,6 +175,7 @@ pipeline.post('/stage', async (c) => {
  * Body: { company_id, until }
  */
 pipeline.post('/snooze', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   let body;
   try {
     body = await c.req.json();
@@ -179,7 +187,7 @@ pipeline.post('/snooze', async (c) => {
   if (!companyId) return c.json({ error: 'company_id is required' }, 400);
 
   try {
-    const result = await snoozeCompany(c.env.DB, companyId, body?.until);
+    const result = await snoozeCompany(c.env.DB, companyId, body?.until, userEmail);
     return c.json({ success: true, ...result });
   } catch (err) {
     if (err instanceof ValidationError) {
@@ -193,12 +201,13 @@ pipeline.post('/snooze', async (c) => {
  * GET /api/pipeline/events/:companyId — retrieve pipeline transition audit trail.
  */
 pipeline.get('/events/:companyId', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   const companyId = asId(c.req.param('companyId'));
   if (!companyId) return c.json({ error: 'Invalid company_id' }, 400);
 
   const { results } = await c.env.DB.prepare(
-    'SELECT * FROM pipeline_events WHERE company_id = ? ORDER BY changed_at DESC'
-  ).bind(companyId).all();
+    'SELECT * FROM pipeline_events WHERE company_id = ? AND agent_email = ? ORDER BY changed_at DESC'
+  ).bind(companyId, userEmail).all();
 
   return c.json({ success: true, events: results || [] });
 });

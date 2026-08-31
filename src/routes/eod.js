@@ -141,6 +141,7 @@ function fallbackReport(date, metrics, activities) {
  *   ?date=YYYY-MM-DD  a specific Springfield business day (default: today)
  */
 eod.get('/', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
   const url = new URL(c.req.url);
   const date = url.searchParams.get('date') || businessDate();
 
@@ -163,13 +164,13 @@ eod.get('/', async (c) => {
     LEFT JOIN contacts ct ON ct.contact_id = COALESCE(
       a.contact_id,
       (SELECT contact_id FROM contacts z
-       WHERE z.company_id = a.company_id
+       WHERE z.company_id = a.company_id AND z.agent_email = a.agent_email
        ORDER BY z.is_primary_dm DESC LIMIT 1)
     )
-    WHERE a.timestamp >= ? AND a.timestamp < ?
+    WHERE a.timestamp >= ? AND a.timestamp < ? AND a.agent_email = ?
     ORDER BY a.timestamp ASC
     LIMIT 300
-  `).bind(start, end).all();
+  `).bind(start, end, userEmail).all();
 
   const rows = results || [];
   const metrics = computeMetrics(rows);

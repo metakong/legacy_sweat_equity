@@ -134,6 +134,9 @@ function heuristicSequence(stops) {
  * }
  */
 routing.post('/optimize', async (c) => {
+  const userEmail = c.get('userEmail');
+  if (!userEmail) return c.json({error:'Unauthorized'}, 401);
+
   let body;
   try {
     body = await c.req.json();
@@ -152,8 +155,8 @@ routing.post('/optimize', async (c) => {
     const { results } = await c.env.DB.prepare(`
       SELECT company_id, company_name, street_1, city, state, zip_code, lat, long, employees, industry
       FROM companies
-      WHERE company_id IN (${placeholders}) AND lat IS NOT NULL AND long IS NOT NULL
-    `).bind(...companyIds).all();
+      WHERE company_id IN (${placeholders}) AND lat IS NOT NULL AND long IS NOT NULL AND agent_email = ?
+    `).bind(...companyIds, userEmail).all();
     stops = results || [];
   } else if (Array.isArray(body?.stops)) {
     stops = body.stops.slice(0, LIMITS.routeStops).map((s) => ({

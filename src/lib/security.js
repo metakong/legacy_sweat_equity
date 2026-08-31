@@ -69,3 +69,18 @@ export function allowedOrigins(env, url) {
 
 export const isHtmlResponse = (response) =>
   (response.headers.get('Content-Type') || '').includes('text/html');
+
+export const ALLOWED_USERS = ['sean_deardorff@us.aflac.com'];
+
+export function extractUserEmail(c) {
+  const jwt = c.req.header('cf-access-jwt-assertion');
+  if (!jwt) return null;
+  try {
+    const parts = jwt.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(atob(parts[1]));
+    return payload.email || null;
+  } catch (err) {
+    return null;
+  }
+}
