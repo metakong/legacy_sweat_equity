@@ -131,11 +131,11 @@ companies.get('/', async (c) => {
            END AS is_renewal_active
     FROM companies co
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-    ORDER BY co.company_name COLLATE NOCASE
+    ORDER BY (SELECT COUNT(*) FROM activity_logs a LEFT JOIN companies c ON a.company_id = c.company_id WHERE a.company_id = co.company_id AND a.timestamp >= date(?, '-7 days')) DESC, co.company_name COLLATE NOCASE
     LIMIT ?
   `;
 
-  const { results } = await c.env.DB.prepare(sql).bind(...binds, limit).all();
+  const { results } = await c.env.DB.prepare(sql).bind(...binds, todayLocal, limit).all();
   return c.json({ companies: results || [] }, 200, { 'Cache-Control': 'no-store' });
 });
 
@@ -231,7 +231,7 @@ export async function handleImport(c) {
 
   // --- PRE-FLIGHT DEDUPLICATION ---
   const existing = await c.env.DB.prepare('SELECT company_id, company_name, street_1, account_number FROM companies').all();
-  const normalizeKey = (n, s) => (String(n || '') + '|' + String(s || '')).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const normalizeKey = (n, s) => (String(n || '') + '|' + String(s || '')).toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
   
   const exactMap = new Map();
   const fuzzyMap = new Map();
