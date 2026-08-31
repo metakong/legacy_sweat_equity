@@ -10,6 +10,8 @@ node_modules/
 mapbox_token.txt
 
 # PII & Data Exports (CRITICAL FOR PUBLIC REPO)
+roofing-archive-2026-08-29.sql
+*.sql
 *.xlsx
 *.csv
 seed-clean.sql
