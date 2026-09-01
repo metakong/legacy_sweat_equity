@@ -171,7 +171,7 @@ app.post('/api/admin/reclassify-industries', async (c) => {
 });
 
 app.get('/api/telemetry', async (c) => {
-  const telemetry = await computeTelemetry(c.env.DB, c.env);
+  const telemetry = await computeTelemetry(c.env.DB, c.env, businessDate(), c.get('userEmail'));
   return c.json(telemetry, 200, { 'Cache-Control': 'no-store' });
 });
 
@@ -224,8 +224,22 @@ app.onError((err, c) => {
 /**
  * Compute aggregate telemetry for the Data Management dashboard.
  */
-export async function computeTelemetry(db, env = {}, targetDate = businessDate()) {
+export async function computeTelemetry(db, env = {}, targetDate = businessDate(), agentEmail = null) {
   const { start, end } = businessDayRangeUtc(targetDate);
+
+  // Scope every aggregate to one agent when the caller knows who is asking.
+  // Omitting it keeps the old whole-database behaviour for callers that
+  // legitimately want it (tests, ops tooling).
+  const scope = agentEmail ? ' WHERE agent_email = ?' : '';
+  const scopeBind = agentEmail ? [agentEmail] : [];
+
+  // A statement with no parameters is executed directly rather than through
+  // bind() — binding an empty argument list is a no-op that some D1 shims
+  // do not implement.
+  const stmt = (sql, binds) => {
+    const prepared = db.prepare(sql);
+    return binds.length ? prepared.bind(...binds) : prepared;
+  };
 
   let totalCompanies = 0;
   let d365SyncedCompanies = 0;
@@ -239,23 +253,23 @@ export async function computeTelemetry(db, env = {}, targetDate = businessDate()
 
   if (db) {
     try {
-      const coRes = await db.prepare(`
+      const coRes = await stmt(`
         SELECT
           COUNT(*) AS total_companies,
           SUM(CASE WHEN is_d365_synced = 1 THEN 1 ELSE 0 END) AS d365_synced_companies
-        FROM companies
-      `).first();
+        FROM companies${scope}
+      `, scopeBind).first();
       totalCompanies = Number(coRes?.total_companies || 0);
       d365SyncedCompanies = Number(coRes?.d365_synced_companies || 0);
     } catch (_) {}
 
     try {
-      const ctRes = await db.prepare(`SELECT COUNT(*) AS total_contacts FROM contacts`).first();
+      const ctRes = await stmt(`SELECT COUNT(*) AS total_contacts FROM contacts${scope}`, scopeBind).first();
       totalContacts = Number(ctRes?.total_contacts || 0);
     } catch (_) {}
 
     try {
-      const actRes = await db.prepare(`
+      const actRes = await stmt(`
         SELECT
           COUNT(*) AS total_activities,
           SUM(CASE WHEN timestamp >= ? AND timestamp < ? THEN 1 ELSE 0 END) AS today_activities,
@@ -263,8 +277,8 @@ export async function computeTelemetry(db, env = {}, targetDate = businessDate()
           SUM(CASE WHEN sync_tier_status = 'TIER1_COPIED' THEN 1 ELSE 0 END) AS tier1_copied,
           SUM(CASE WHEN sync_tier_status = 'TIER2_EXPORTED' THEN 1 ELSE 0 END) AS tier2_exported,
           SUM(CASE WHEN sync_tier_status = 'TIER3_EXPORTED' THEN 1 ELSE 0 END) AS tier3_exported
-        FROM activity_logs
-      `).bind(start, end).first();
+        FROM activity_logs${scope}
+      `, [start, end, ...scopeBind]).first();
       totalActivities = Number(actRes?.total_activities || 0);
       todayActivities = Number(actRes?.today_activities || 0);
       pendingD365Sync = Number(actRes?.pending_d365_sync || 0);

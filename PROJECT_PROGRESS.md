@@ -8,6 +8,107 @@
 
 ---
 
+## 2026-09-01 03:30 UTC (2026-08-31 22:30 CDT) — Fix: The 500s Were a Missing Column, Not a Binding Mismatch (Agent: Claude Opus 5)
+
+### Session Goal
+Resolve "Could not load targets: Internal Server Error", reported across multiple
+sections of the app, and audit the codebase for related damage from the recent
+multi-tenant refactor.
+
+### Root Cause — and why three prior sessions missed it
+The previous three sessions (2026-08-31 18:30, 20:12, 21:20) all diagnosed the 500s
+as SQLite **parameter binding** mismatches and rewrote bind arrays accordingly. The
+bindings were correct. The real fault was in the **database**, not the code:
+
+`migrations/0002_multi_tenant.sql` never finished against production D1.
+
+- It rebuilds each table with `INSERT INTO new_x SELECT *, '<email>' FROM x`, which
+  maps columns **by position**. Production had picked up `sic_code`,
+  `account_number` and `post_enrollment_date` as trailing `ALTER TABLE` columns,
+  while the new table declares them mid-list. Column *counts* matched (29 = 29), so
+  SQLite raised no error and silently transposed every value:
+  `is_d365_synced -> sic_code`, `created_at -> account_number`,
+  `pipeline_stage -> lost`.
+- The run then stopped after the `companies` step. Production was left with an
+  orphaned, corrupt `new_companies` table **and** live tables that still had no
+  `agent_email` column at all.
+
+Every query written by the refactor references `co.agent_email`. Against the live
+schema that is `no such column: co.agent_email` -> SQLITE_ERROR -> `onError` -> 500.
+Verified directly against production D1 before changing anything.
+
+The reason no test caught it: all 114 existing tests bind the Worker to a mock that
+matches on SQL substrings. That mock answers whatever the code asks for, so it
+cannot distinguish a valid query from one naming a nonexistent column.
+
+### Execution Summary
+- **Phase 1: Corrected migration (`migrations/0003_add_agent_email.sql`)**
+  - Non-destructive `ALTER TABLE ... ADD COLUMN agent_email` on `companies`,
+    `contacts`, `activity_logs`, `pipeline_events`. No data is moved, so no column
+    can be transposed. Existing rows backfill via the literal default.
+  - `CREATE UNIQUE INDEX` on each tenant tuple — `(company_id, agent_email)`,
+    `(contact_id, agent_email)`, `(log_id, agent_email)`, `(event_id, agent_email)`
+    — because the upserts in `src/lib/db.js` use those as `ON CONFLICT` targets and
+    SQLite resolves an `ON CONFLICT` target against a UNIQUE index.
+  - Tenant-scoped covering indexes for the hot paths.
+  - `DROP TABLE new_companies` to clear the corrupt orphan.
+  - `0002_multi_tenant.sql` given a prominent DO-NOT-RUN header explaining the
+    transposition, kept only as a record.
+- **Phase 2: Applied to production D1 (`legacy-db`)**, one statement per call.
+  Row counts unchanged and fully backfilled: companies 207/207, contacts 2066/2066,
+  activity_logs 7/7, pipeline_events 6/6. Spot-checked rows retain correct
+  `is_d365_synced`, `created_at` and `pipeline_stage` — no transposition. Orphan gone.
+  The route-planner query now returns 207 targets where it previously errored.
+- **Phase 3: Offline-first bug (`public/sw.js`)**
+  - `/app/pipeline.js` was missing from `CORE_ASSETS`. `app.js` imports it
+    **statically**, so on a cold offline start the failed module fetch aborted the
+    whole module graph — the entire PWA failed to boot offline, not just the
+    Pipeline tab. Added it and bumped `CACHE_NAME` to `aflac-prospect-v5`.
+- **Phase 4: Version-control gap (`.gitignore`)**
+  - A blanket `*.sql` rule made `migrations/` invisible to git, which is precisely
+    why the schema drift went unnoticed. Added negations for `schema.sql` and
+    `migrations/*.sql`; added the local dev databases to the ignore list.
+- **Phase 5: Latent correctness**
+  - `src/routes/companies.js`: removed a spurious `LEFT JOIN companies c` from the
+    `all_active` ORDER BY subquery. Nothing was selected from it, but it multiplied
+    the recency count once a second agent shared a `company_id`.
+  - `src/index.js`: `computeTelemetry` now takes an optional `agentEmail` and scopes
+    its aggregates; `/api/telemetry` passes the signed-in agent. Previously it
+    counted every agent's rows. Existing 3-argument callers are unaffected.
+- **Phase 6: Removed refactor debris**
+  - Deleted 13 committed one-shot codemod scripts (`rewrite_db.cjs`,
+    `harden_db.cjs`, `patch_tests*.cjs`, `remove_test.cjs`, ...). They rewrite
+    `src/lib/db.js` and `test/worker.test.js` in place; `harden_db.cjs` uses a global
+    regex that would re-apply and inject duplicate lines on a second run. Recoverable
+    from git history.
+- **Phase 7: Regression coverage (`test/schema.test.js`, new)**
+  - Runs the real Worker and real SQL against **real SQLite**, in both shapes the
+    schema can take: "fresh" (built from `schema.sql`) and "migrated" (the legacy
+    production schema with 0003 applied). Production is the migrated shape, so
+    testing only the fresh one would still have missed this.
+  - Asserts every read endpoint the UI loads returns 2xx, that upserts merge on the
+    tenant tuple instead of duplicating, that stage/snooze mutations persist, that
+    0003 preserves column values and drops the orphan, and that every module on disk
+    is precached by the service worker.
+  - Negative control confirmed: without 0003, `/api/companies?filter=all_active`
+    returns exactly the 500 the user reported.
+  - Test suite: **124/124 passing**.
+
+### Verified
+- All four desktop views (Route Planner, Pipeline, Data Management, EOD AI Debrief)
+  render against a production-shaped database with no console errors.
+- Production D1 confirmed healthy post-migration.
+
+### Note on auth (not changed)
+`src/index.js` falls back to `'sean_deardorff@us.aflac.com'` when no CF Access JWT is
+present, so the Worker alone would serve data to an unauthenticated caller. Cloudflare
+Access **is** enforcing at the edge — an unauthenticated request to
+`legacysweatequity.com/api/*` returns 302 to the Access login — so production is not
+exposed. Left as-is to avoid a lockout risk, but the fallback should eventually become
+a 401 so the Worker is not relying solely on the edge.
+
+---
+
 ## 2026-08-31 21:20 CDT — Fix: Align Parameter Counts with Repeated Agent Email Placeholders & Harden JWT Fallback (Agent: Antigravity)
 
 ### Session Goal

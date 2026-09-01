@@ -116,7 +116,7 @@ companies.get('/', async (c) => {
   }
 
   const orderClause = filter === 'all_active'
-    ? `ORDER BY (SELECT COUNT(*) FROM activity_logs a LEFT JOIN companies c ON a.company_id = c.company_id WHERE a.company_id = co.company_id AND a.agent_email = ? AND a.timestamp >= date(?, '-7 days')) DESC, co.company_name COLLATE NOCASE`
+    ? `ORDER BY (SELECT COUNT(*) FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = ? AND a.timestamp >= date(?, '-7 days')) DESC, co.company_name COLLATE NOCASE`
     : `ORDER BY co.company_name COLLATE NOCASE`;
 
   const sql = `

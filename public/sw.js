@@ -1,5 +1,5 @@
 // Bump on every change to precached asset contents or this file's logic.
-const CACHE_NAME = 'aflac-prospect-v4';
+const CACHE_NAME = 'aflac-prospect-v5';
 
 // Same-origin app shell — install fails if any of these are missing.
 // These are native ES modules; each one is a separate request, so each one
@@ -14,6 +14,7 @@ const CORE_ASSETS = [
   '/app/d365.js',
   '/app/markdown.js',
   '/app/desktop.js',
+  '/app/pipeline.js',
   '/app/app.css',
   '/manifest.json',
   '/icon.jpg'

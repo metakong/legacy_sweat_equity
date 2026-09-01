@@ -12,6 +12,14 @@ mapbox_token.txt
 # PII & Data Exports (CRITICAL FOR PUBLIC REPO)
 roofing-archive-2026-08-29.sql
 *.sql
+
+# ...but the schema and its migrations MUST be tracked. A blanket *.sql rule
+# is why the failed multi-tenant migration went unnoticed: migrations/ was
+# invisible to git, so the repo and the live D1 database drifted apart with
+# nothing in version control to show it.
+!schema.sql
+!migrations/
+!migrations/*.sql
 *.xlsx
 *.csv
 seed-clean.sql
@@ -19,6 +27,13 @@ temp_batch.sql
 geocode-updates.sql
 geocode-chunk-*.sql
 seed-output.sql
+
+# Local dev databases (real data, never committed)
+.local_db.sqlite
+.local_db.sqlite-*
+.replica.sqlite
+.replica.sqlite-*
+.local_r2/
 
 # OS Files
 .DS_Store
