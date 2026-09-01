@@ -10,7 +10,7 @@
  * whenever connectivity returns.
  */
 
-import { $, showToast } from './ui.js';
+import { $, showToast, apiPost } from './ui.js';
 
 async function requestPersistentStorage() {
   if (navigator.storage && navigator.storage.persist) {
@@ -113,6 +113,12 @@ export function getCachedDossier(key) {
 // ---------------------------------------------------------------------
 
 export function enqueue(entry) {
+  if (!entry.log_id) {
+    entry.log_id = crypto.randomUUID();
+  }
+  if (!entry.timestamp) {
+    entry.timestamp = new Date().toISOString();
+  }
   return new Promise((resolve, reject) => {
     if (!db) return reject(new Error('Local storage is still initializing'));
     let tx;
@@ -126,6 +132,8 @@ export function enqueue(entry) {
     tx.onerror = () => reject(tx.error);
   });
 }
+
+export const addToQueue = enqueue;
 
 function readAll() {
   return new Promise((resolve, reject) => {
@@ -210,7 +218,38 @@ export async function syncQueue() {
     entries.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
 
     for (const entry of entries) {
-      if (entry.audioBlob) {
+      if (entry.type === 'company_creation') {
+        try {
+          const payload = entry.payload || {
+            company_id: entry.company_id,
+            company_name: entry.company_name,
+            lat: entry.lat,
+            long: entry.long ?? entry.lng,
+            street_1: entry.street_1,
+            city: entry.city,
+            state: entry.state,
+            zip_code: entry.zip_code
+          };
+          await apiPost('/api/companies/import', { companies: [payload] });
+          await remove(entry.log_id);
+          drained += 1;
+          if (typeof window !== 'undefined' && window.syncChannel?.postMessage) {
+            window.syncChannel.postMessage({
+              type: 'CRM_UPDATE',
+              company_id: payload.company_id
+            });
+          }
+        } catch (err) {
+          if (err.status >= 400 && err.status < 500) {
+            console.warn('Company creation rejected, discarding:', err.message);
+            showToast(`Could not sync company "${entry.payload?.company_name || 'new'}" — ${err.message}`, 'error');
+            await remove(entry.log_id);
+          } else {
+            console.error('Company creation sync failed, will retry:', err);
+            break; // Stop syncing remaining to maintain chronological order
+          }
+        }
+      } else if (entry.audioBlob) {
         try {
           const result = await uploadVoiceLog(entry);
           await remove(entry.log_id);

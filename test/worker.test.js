@@ -1385,6 +1385,55 @@ test('extractUserEmail safely traps invalid, malformed or missing JWT tokens and
   assert.equal(extractUserEmail({ req: { header: () => `header.${validPayload}.sig` } }), 'sean_deardorff@us.aflac.com');
 });
 
+test('POST /api/companies/import successfully processes company_creation offline queue items', async () => {
+  const inserted = [];
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          return {
+            async all() {
+              return { results: [] };
+            },
+            async run() {
+              if (sql.includes('INSERT INTO companies')) {
+                inserted.push({ sql, args });
+              }
+              return { success: true };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const payload = {
+    companies: [{
+      company_id: 'poi-comp-uuid-1',
+      company_name: 'Downtown Diner',
+      lat: 37.2089,
+      lng: -93.2923
+    }]
+  };
+
+  const res = await app.request('/api/companies/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }, { DB: mockDb });
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.success, true);
+  assert.equal(data.imported, 1);
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].args[0], 'poi-comp-uuid-1');
+  assert.equal(inserted[0].args[4], 'Downtown Diner');
+  assert.equal(inserted[0].args[10], 37.2089);
+  assert.equal(inserted[0].args[11], -93.2923);
+});
+
+
 
 
 

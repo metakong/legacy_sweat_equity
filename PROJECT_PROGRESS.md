@@ -8,6 +8,29 @@
 
 ---
 
+## 2026-09-01 13:45 UTC (2026-09-01 08:45 CDT) — Visual Prospecting: Mapbox POI Interception & Offline Company Creation Queue
+
+### Session Goal
+Implement "Visual Prospecting" enabling field agents to tap native Mapbox POI labels on the field map, populate them as net-new targets with transient state, and seamlessly queue company creation into the offline IndexedDB sync queue ahead of subsequent activity logs.
+
+### Execution Summary
+- **Phase 1: Offline Store Queue (`public/app/store.js`)**
+  - Added `apiPost` import from `./ui.js`.
+  - Added auto-generation of `log_id` and ISO `timestamp` in `enqueue` / `addToQueue` if omitted.
+  - Exported `addToQueue` as alias to `enqueue`.
+  - Handled `item.type === 'company_creation'` in `syncQueue()`, dispatching to `POST /api/companies/import` with deduplication and `agent_email` scoping.
+- **Phase 2: Mapbox POI Interception (`public/app/field.js`)**
+  - Added `poi-label` click listener in `initMap()` checking `queryRenderedFeatures` for clicked POI labels.
+  - Generated transient company object with generated UUID, coordinates (`lat`, `lng`), and `isNew: true`.
+  - Exported `selectCompany` and updated `applyCompany` to display net-new POI target status and navigate the map.
+- **Phase 3: Seamless Activity Logging & Upsert (`public/app/field.js`)**
+  - Updated `initSave()` to check `state.selectedCompany?.isNew`.
+  - Queues `company_creation` item prior to queuing the activity log, immediately clearing the `isNew` flag.
+  - Sequential processing in `syncQueue` ensures company is upserted before activity log attaches.
+- **Phase 4: Dual Synchronization & Validation**
+  - Added unit test in `test/worker.test.js` validating `POST /api/companies/import` with POI payload.
+  - Verified all **125 tests** pass (`npm test`).
+
 ## 2026-09-01 03:30 UTC (2026-08-31 22:30 CDT) — Fix: The 500s Were a Missing Column, Not a Binding Mismatch (Agent: Claude Opus 5)
 
 ### Session Goal

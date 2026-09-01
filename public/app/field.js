@@ -7,7 +7,8 @@
  */
 
 import { $, el, showToast, setButtonBusy, apiFetch, apiPost } from './ui.js';
-import { enqueue, syncQueue, updatePendingBadge, cacheDossier, getCachedDossier } from './store.js';
+import * as store from './store.js';
+import { enqueue, addToQueue, syncQueue, updatePendingBadge, cacheDossier, getCachedDossier } from './store.js';
 
 // Springfield, MO — the fallback when geolocation is unavailable or denied.
 const DEFAULT_COORDS = { lat: 37.2089, long: -93.2923 };
@@ -208,6 +209,57 @@ function initMap() {
   initMapFilterChips();
   loadMapCompanies(currentMapFilter);
 
+  const map = fieldMap;
+  if (map && typeof map.on === 'function') {
+    const handlePoiClick = (e) => {
+      if (typeof map.queryRenderedFeatures !== 'function') return;
+      const point = e.point || (e.containerPoint ? [e.containerPoint.x, e.containerPoint.y] : null);
+      if (!point) return;
+      const features = map.queryRenderedFeatures(point, { layers: ['poi-label'] });
+      if (!features || !features.length) return;
+
+      const poi = features[0];
+      const poiName = poi.properties?.name;
+      if (!poiName) return;
+
+      // Generate a transient company object
+      const newCompany = {
+        company_id: crypto.randomUUID(),
+        company_name: poiName,
+        lat: e.lngLat ? e.lngLat.lat : (e.latlng ? e.latlng.lat : state.coords.lat),
+        lng: e.lngLat ? e.lngLat.lng : (e.latlng ? e.latlng.lng : state.coords.long),
+        isNew: true // Transient flag
+      };
+
+      selectCompany(newCompany);
+    };
+
+    map.on('click', handlePoiClick);
+    map.on('load', () => {
+      map.on('click', (e) => {
+        const features = typeof map.queryRenderedFeatures === 'function'
+          ? map.queryRenderedFeatures(e.point, { layers: ['poi-label'] })
+          : [];
+        if (!features || !features.length) return;
+
+        const poi = features[0];
+        const poiName = poi.properties?.name;
+        if (!poiName) return;
+
+        // Generate a transient company object
+        const newCompany = {
+          company_id: crypto.randomUUID(),
+          company_name: poiName,
+          lat: e.lngLat ? e.lngLat.lat : (e.latlng ? e.latlng.lat : state.coords.lat),
+          lng: e.lngLat ? e.lngLat.lng : (e.latlng ? e.latlng.lng : state.coords.long),
+          isNew: true // Transient flag
+        };
+
+        selectCompany(newCompany);
+      });
+    });
+  }
+
   // The map is inside a tab panel; revealing it after layout leaves Leaflet
   // with stale dimensions until it is told to re-measure.
   window.addEventListener('viewactivated', (event) => {
@@ -317,8 +369,8 @@ function currentCompanyPayload() {
     city: $('cityInput')?.value?.trim() || null,
     state: $('stateInput')?.value?.trim() || null,
     zip_code: $('zipInput')?.value?.trim() || null,
-    lat: state.coords?.lat ?? null,
-    long: state.coords?.long ?? null
+    lat: state.selectedCompany?.lat ?? state.coords?.lat ?? null,
+    long: state.selectedCompany?.long ?? state.selectedCompany?.lng ?? state.coords?.long ?? null
   };
 }
 
@@ -480,6 +532,10 @@ function renderObjections(rawObjections) {
   }
 }
 
+export function selectCompany(company) {
+  applyCompany(company);
+}
+
 export function applyCompany(company) {
   state.selectedCompanyId = company.company_id;
   state.selectedCompany = company;
@@ -490,17 +546,27 @@ export function applyCompany(company) {
   $('zipInput').value = company.zip_code || '';
 
   const touches = Number(company.touch_count || 0);
-  if (company.is_renewal_active) {
+  if (company.isNew) {
+    $('companyMatchHint').textContent = 'Net-new target (POI) — will be queued and created on save.';
+    $('companyMatchHint').className = 'field-hint';
+  } else if (company.is_renewal_active) {
     $('companyMatchHint').textContent = `Known account · 📅 Upcoming Renewal (Window Active) · renewal date ${company.renewal_date || 'Open Enrollment'}`;
+    $('companyMatchHint').className = 'field-hint is-match';
   } else {
     $('companyMatchHint').textContent = touches > 0
       ? `Known account · ${touches} previous ${touches === 1 ? 'touch' : 'touches'} · status ${company.latest_disposition || company.rating || 'Cold'}`
       : `Known account · not yet contacted · rating ${company.rating || 'Cold'}`;
+    $('companyMatchHint').className = 'field-hint is-match';
   }
-  $('companyMatchHint').className = 'field-hint is-match';
 
-  if (company.lat && company.long && fieldMap) {
-    fieldMap.setView([company.lat, company.long], 16);
+  const lat = company.lat;
+  const lng = company.long ?? company.lng;
+  if (lat && lng && fieldMap) {
+    if (typeof fieldMap.setView === 'function') {
+      fieldMap.setView([lat, lng], 16);
+    } else if (typeof fieldMap.flyTo === 'function') {
+      fieldMap.flyTo({ center: [lng, lat], zoom: 16 });
+    }
   }
 
   // Surface AI Next Action if recorded
@@ -1147,7 +1213,19 @@ function initSave() {
 
     setButtonBusy(button, true, 'Saving…');
     try {
-      await enqueue(entry);
+      if (state.selectedCompany?.isNew) {
+        await store.addToQueue({
+          type: 'company_creation',
+          payload: {
+            company_id: state.selectedCompany.company_id,
+            company_name: state.selectedCompany.company_name,
+            lat: state.selectedCompany.lat,
+            lng: state.selectedCompany.lng ?? state.selectedCompany.long
+          }
+        });
+        delete state.selectedCompany.isNew;
+      }
+      await store.addToQueue(entry);
       state.lastSubmittedLogId = entry.log_id;
       await updatePendingBadge();
       resetForm();
