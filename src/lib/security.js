@@ -73,14 +73,19 @@ export const isHtmlResponse = (response) =>
 export const ALLOWED_USERS = ['sean_deardorff@us.aflac.com'];
 
 export function extractUserEmail(c) {
-  const jwt = c.req.header('cf-access-jwt-assertion');
-  if (!jwt) return null;
   try {
+    if (!c || !c.req || typeof c.req.header !== 'function') return null;
+    const jwt = c.req.header('cf-access-jwt-assertion');
+    if (!jwt || typeof jwt !== 'string') return null;
     const parts = jwt.split('.');
     if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1]));
-    return payload.email || null;
-  } catch (err) {
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const jsonStr = typeof atob === 'function'
+      ? atob(base64)
+      : Buffer.from(base64, 'base64').toString('utf-8');
+    const payload = JSON.parse(jsonStr);
+    return payload && typeof payload.email === 'string' ? payload.email : null;
+  } catch {
     return null;
   }
 }

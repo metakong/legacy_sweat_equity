@@ -8,6 +8,27 @@
 
 ---
 
+## 2026-08-31 21:20 CDT — Fix: Align Parameter Counts with Repeated Agent Email Placeholders & Harden JWT Fallback (Agent: Antigravity)
+
+### Session Goal
+Resolve remaining 500 errors by precisely matching parameter binding counts for repeated `agent_email = ?` checks in Route Planner subqueries and Pipeline CTEs, while adding a robust `try/catch` safety trap to `extractUserEmail`.
+
+### Execution Summary
+- **Phase 1: Fix Route Planner Parameter Counts (`src/routes/companies.js`)**
+  - Updated `GET /api/companies` `filter=all_active` subquery to parameterize `a.agent_email = ?` and `a.timestamp >= date(?, '-7 days')`.
+  - Configured binding array to bind `userEmail` twice: `[userEmail, userEmail, todayLocal, limit, offset]` for `filter=all_active` and `[userEmail, limit, offset]` for default queries.
+- **Phase 2: Fix Pipeline Tab Parameter Counts (`src/routes/pipeline.js`)**
+  - Updated `GET /api/pipeline` CTEs to include `WHERE a.agent_email = ?` in `latest` and `WHERE agent_email = ?` in `agg`.
+  - Configured `.bind(...cteBinds, ...binds, limit, offset)` passing `userEmail` three times (`latest`, `agg`, and main `WHERE c.agent_email = ?`).
+- **Phase 3: Harden JWT Extractor Fallback (`src/lib/security.js`)**
+  - Wrapped `extractUserEmail` in a defensive `try/catch` block that traps missing/malformed headers, invalid base64, and JSON parse failures, cleanly returning `null` so `/api/*` middleware falls back to the default agent email without throwing 500 errors.
+- **Phase 4: Dual Synchronization & Validation**
+  - Added unit test in `test/worker.test.js` validating that `extractUserEmail` safely handles null, invalid base64, malformed tokens, and JSON payloads.
+  - Updated mock binding checks in `test/worker.test.js` to assert repeated `userEmail` bindings.
+  - Test Suite: **114/114 tests passing** with 0 failures.
+
+---
+
 ## 2026-08-31 20:12 CDT — Fix: Perfectly Align SQLite Parameter Bindings Across All Multi-Tenant Endpoints (Agent: Antigravity)
 
 ### Session Goal

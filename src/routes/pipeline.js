@@ -59,28 +59,30 @@ pipeline.get('/', async (c) => {
     binds.push(stage);
   }
 
+  const cteBinds = [userEmail, userEmail];
+
   const sql = `
     WITH latest AS (
       SELECT
         a.company_id,
-        a.agent_email,
         a.log_id AS latest_log_id,
         a.timestamp AS latest_timestamp,
         a.disposition AS latest_disposition,
         a.next_action_date,
         a.next_action_text,
         a.ai_structured_notes,
-        ROW_NUMBER() OVER (PARTITION BY a.company_id, a.agent_email ORDER BY a.timestamp DESC) AS rn
+        ROW_NUMBER() OVER (PARTITION BY a.company_id ORDER BY a.timestamp DESC) AS rn
       FROM activity_logs a
+      WHERE a.agent_email = ?
     ),
     agg AS (
       SELECT
         company_id,
-        agent_email,
         COUNT(*) AS touch_count,
         MAX(timestamp) AS last_touched
       FROM activity_logs
-      GROUP BY company_id, agent_email
+      WHERE agent_email = ?
+      GROUP BY company_id
     )
     SELECT
       c.company_id,
@@ -112,14 +114,14 @@ pipeline.get('/', async (c) => {
       json_extract(l.ai_structured_notes, '$.summary') AS latest_summary,
       CAST(ROUND(julianday('${today}') - julianday(COALESCE(c.stage_entered_at, c.created_at, '${today}'))) AS INTEGER) AS days_in_stage
     FROM companies c
-    LEFT JOIN latest l ON c.company_id = l.company_id AND c.agent_email = l.agent_email AND l.rn = 1
-    LEFT JOIN agg ON c.company_id = agg.company_id AND c.agent_email = agg.agent_email
+    LEFT JOIN latest l ON c.company_id = l.company_id AND l.rn = 1
+    LEFT JOIN agg ON c.company_id = agg.company_id
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY c.pipeline_stage, days_in_stage DESC, c.company_name COLLATE NOCASE
     LIMIT ? OFFSET ?
   `;
 
-  const { results } = await c.env.DB.prepare(sql).bind(...binds, limit, offset).all();
+  const { results } = await c.env.DB.prepare(sql).bind(...cteBinds, ...binds, limit, offset).all();
   const rows = Array.isArray(results) ? results : [];
 
   return c.json({

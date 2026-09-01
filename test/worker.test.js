@@ -1249,12 +1249,12 @@ test('GET /api/companies parameter bindings align for all_active filter and defa
 
   const todayLocal = businessDate();
 
-  // 1. filter=all_active
+  // 1. filter=all_active binds userEmail twice: once in WHERE and once in ORDER BY subquery
   const resAllActive = await app.request('/api/companies?filter=all_active&limit=10&offset=5', {
     method: 'GET'
   }, { DB: mockDb });
   assert.equal(resAllActive.status, 200);
-  assert.deepEqual(capturedBinds, ['sean_deardorff@us.aflac.com', todayLocal, 10, 5]);
+  assert.deepEqual(capturedBinds, ['sean_deardorff@us.aflac.com', 'sean_deardorff@us.aflac.com', todayLocal, 10, 5]);
 
   // 2. default / no filter
   const resDefault = await app.request('/api/companies?limit=25&offset=0', {
@@ -1311,12 +1311,12 @@ test('GET /api/pipeline and GET /api/pipeline/events/:companyId bind userEmail c
     }
   };
 
-  // GET /api/pipeline
+  // GET /api/pipeline binds userEmail 3 times (latest CTE, agg CTE, main WHERE)
   const pipeRes = await app.request('/api/pipeline?include_snoozed=1&limit=100&offset=0', {
     method: 'GET'
   }, { DB: mockDb });
   assert.equal(pipeRes.status, 200);
-  assert.deepEqual(pipelineBinds, ['sean_deardorff@us.aflac.com', 100, 0]);
+  assert.deepEqual(pipelineBinds, ['sean_deardorff@us.aflac.com', 'sean_deardorff@us.aflac.com', 'sean_deardorff@us.aflac.com', 100, 0]);
 
   // GET /api/pipeline/events/:companyId
   const eventRes = await app.request('/api/pipeline/events/comp-1', {
@@ -1360,6 +1360,29 @@ test('GET /api/exports/tier1 and /api/exports/tier2 bind userEmail correctly', a
   }, { DB: mockDb });
   assert.equal(res2.status, 200);
   assert.deepEqual(tier2Binds, ['sean_deardorff@us.aflac.com']);
+});
+
+test('extractUserEmail safely traps invalid, malformed or missing JWT tokens and returns null', async () => {
+  const { extractUserEmail } = await import('../src/lib/security.js');
+
+  // Missing or non-object context
+  assert.equal(extractUserEmail(null), null);
+  assert.equal(extractUserEmail({}), null);
+  assert.equal(extractUserEmail({ req: {} }), null);
+
+  // Missing header
+  assert.equal(extractUserEmail({ req: { header: () => null } }), null);
+
+  // Malformed tokens
+  assert.equal(extractUserEmail({ req: { header: () => 'not-a-jwt' } }), null);
+  assert.equal(extractUserEmail({ req: { header: () => 'a.b' } }), null);
+  assert.equal(extractUserEmail({ req: { header: () => 'a.b.c.d' } }), null);
+  assert.equal(extractUserEmail({ req: { header: () => 'a.!!!invalid-base64!!!.c' } }), null);
+  assert.equal(extractUserEmail({ req: { header: () => `header.${Buffer.from('not json').toString('base64')}.sig` } }), null);
+
+  // Valid JWT payload
+  const validPayload = Buffer.from(JSON.stringify({ email: 'sean_deardorff@us.aflac.com' })).toString('base64');
+  assert.equal(extractUserEmail({ req: { header: () => `header.${validPayload}.sig` } }), 'sean_deardorff@us.aflac.com');
 });
 
 
