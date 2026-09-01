@@ -8,6 +8,29 @@
 
 ---
 
+## 2026-08-31 20:12 CDT — Fix: Perfectly Align SQLite Parameter Bindings Across All Multi-Tenant Endpoints (Agent: Antigravity)
+
+### Session Goal
+Resolve 500 Internal Server Errors caused by SQLite parameter binding mismatches following the multi-tenant database refactor across route planner, data/activity logs, deal-flow pipeline, and export endpoints.
+
+### Execution Summary
+- **Phase 1: Fix Route Planner Bindings (`src/routes/companies.js`)**
+  - Updated `GET /api/companies` to properly align parameter bindings for both `filter=all_active` (`[userEmail, todayLocal, limit, offset]`) and standard queries (`[userEmail, limit, offset]`).
+  - Added conditional `ORDER BY` clause that injects `date(?, '-7 days')` only when `filter === 'all_active'`, ensuring exact 1:1 parameter alignment with the SQL string.
+- **Phase 2: Fix Data Tab Bindings (`src/routes/activity.js`)**
+  - Updated `GET /api/activity` to parse `limit` and `offset` and execute `.bind(...binds, limit, offset)` where `binds` starts with `userEmail`.
+- **Phase 3: Fix Pipeline Tab Bindings (`src/routes/pipeline.js` & `src/lib/db.js`)**
+  - Refactored `GET /api/pipeline` CTEs to join on `agent_email` without raw string interpolation or extra select-level `?` parameters, ensuring `.bind(...binds, limit, offset)` binds `userEmail` first.
+  - Verified and aligned `GET /api/pipeline/events/:companyId` to bind `[companyId, userEmail]`.
+  - Fixed parameter bindings in `src/lib/db.js` for `setCompanyRating`, `setCompanyRenewalDate`, `autoAdvancePipelineStage`, `transitionPipelineStage`, `snoozeCompany`, and `companyExists`.
+- **Phase 4: Fix Export Bindings (`src/routes/exports.js` & `src/index.js`)**
+  - Added explicit `GET /tier1` and `GET /tier2` routes to `exportsRouter` and mapped both `/api/export` and `/api/exports` in `src/index.js`, binding `userEmail` cleanly.
+- **Phase 5: Dual Synchronization & Validation**
+  - Added unit tests in `test/worker.test.js` validating parameter bindings across all updated endpoints.
+  - Test Suite: **113/113 tests passed** with 0 failures.
+
+---
+
 ## 2026-08-30 19:35 CDT — Pre-Call Intelligence Pipeline Optimization & Cross-Tab BroadcastChannel Synchronization (Agent: Antigravity)
 
 ### Session Goal

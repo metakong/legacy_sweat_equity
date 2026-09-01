@@ -622,13 +622,15 @@ activity.get('/', async (c) => {
 
   const limitRaw = Number(url.searchParams.get('limit'));
   const limit = Number.isInteger(limitRaw) && limitRaw > 0 && limitRaw <= 500 ? limitRaw : 200;
+  const offsetRaw = Number(url.searchParams.get('offset'));
+  const offset = Number.isInteger(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
 
   const { results } = await c.env.DB.prepare(`
     ${ACTIVITY_SELECT}
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY a.timestamp DESC
-    LIMIT ?
-  `).bind(...binds, limit).all();
+    LIMIT ? OFFSET ?
+  `).bind(...binds, limit, offset).all();
 
   return c.json({ date, activities: results || [] }, 200, { 'Cache-Control': 'no-store' });
 });

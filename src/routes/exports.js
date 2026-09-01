@@ -110,4 +110,84 @@ exports_.get('/d365', async (c) => {
   }, 200, { 'Cache-Control': 'no-store' });
 });
 
+/**
+ * GET /api/export/tier1 — export Tier 1 activity/leads.
+ */
+exports_.get('/tier1', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
+  const url = new URL(c.req.url);
+  const all = url.searchParams.get('all') === '1';
+  const date = url.searchParams.get('date') || businessDate();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+    return c.json({ error: 'Invalid date format (expected YYYY-MM-DD)' }, 400);
+  }
+
+  const where = [];
+  const binds = [];
+
+  where.push('co.agent_email = ?');
+  binds.push(userEmail);
+
+  if (!all) {
+    const { start, end } = businessDayRangeUtc(date);
+    where.push('a.timestamp >= ? AND a.timestamp < ?');
+    binds.push(start, end);
+  }
+
+  const { results } = await c.env.DB.prepare(`
+    ${EXPORT_SELECT}
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY a.timestamp DESC
+    LIMIT 1000
+  `).bind(...binds).all();
+
+  return c.json({
+    success: true,
+    date: all ? null : date,
+    tier1: results || []
+  }, 200, { 'Cache-Control': 'no-store' });
+});
+
+/**
+ * GET /api/export/tier2 — export Tier 2 existing D365 leads.
+ */
+exports_.get('/tier2', async (c) => {
+  const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
+  const url = new URL(c.req.url);
+  const all = url.searchParams.get('all') === '1';
+  const date = url.searchParams.get('date') || businessDate();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+    return c.json({ error: 'Invalid date format (expected YYYY-MM-DD)' }, 400);
+  }
+
+  const where = [];
+  const binds = [];
+
+  where.push('co.agent_email = ?');
+  binds.push(userEmail);
+
+  where.push('co.d365_lead_id IS NOT NULL');
+
+  if (!all) {
+    const { start, end } = businessDayRangeUtc(date);
+    where.push('a.timestamp >= ? AND a.timestamp < ?');
+    binds.push(start, end);
+  }
+
+  const { results } = await c.env.DB.prepare(`
+    ${EXPORT_SELECT}
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY co.company_name COLLATE NOCASE
+    LIMIT 1000
+  `).bind(...binds).all();
+
+  return c.json({
+    success: true,
+    date: all ? null : date,
+    tier2: results || []
+  }, 200, { 'Cache-Control': 'no-store' });
+});
+
 export default exports_;

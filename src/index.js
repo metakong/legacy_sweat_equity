@@ -118,6 +118,7 @@ app.route('/api/enrich', enrichRouter);
 app.route('/api/eod-debrief', eodRouter);
 app.route('/api/route', routingRouter);
 app.route('/api/export', exportsRouter);
+app.route('/api/exports', exportsRouter);
 app.route('/api/pipeline', pipelineRouter);
 app.route('/api/audio', audioRouter);
 app.route('/api/activity', activityRouter);

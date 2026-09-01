@@ -43,6 +43,8 @@ companies.get('/', async (c) => {
   const rating = RATINGS.find((r) => r.toLowerCase() === (url.searchParams.get('rating') || '').toLowerCase());
   const limitRaw = Number(url.searchParams.get('limit'));
   const limit = Number.isInteger(limitRaw) && limitRaw > 0 && limitRaw <= 1000 ? limitRaw : 50;
+  const offsetRaw = Number(url.searchParams.get('offset'));
+  const offset = Number.isInteger(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
 
   const where = [];
   const binds = [];
@@ -113,6 +115,10 @@ companies.get('/', async (c) => {
     `);
   }
 
+  const orderClause = filter === 'all_active'
+    ? `ORDER BY (SELECT COUNT(*) FROM activity_logs a LEFT JOIN companies c ON a.company_id = c.company_id WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email AND a.timestamp >= date(?, '-7 days')) DESC, co.company_name COLLATE NOCASE`
+    : `ORDER BY co.company_name COLLATE NOCASE`;
+
   const sql = `
     SELECT co.company_id, co.company_name, co.street_1, co.street_2, co.city, co.state,
            co.zip_code, co.lat, co.long, co.lead_source, co.rating, co.employees,
@@ -135,11 +141,15 @@ companies.get('/', async (c) => {
            END AS is_renewal_active
     FROM companies co
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-    ORDER BY (SELECT COUNT(*) FROM activity_logs a LEFT JOIN companies c ON a.company_id = c.company_id WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email AND a.timestamp >= date(?, '-7 days')) DESC, co.company_name COLLATE NOCASE
-    LIMIT ?
+    ${orderClause}
+    LIMIT ? OFFSET ?
   `;
 
-  const { results } = await c.env.DB.prepare(sql).bind(...binds, todayLocal, limit).all();
+  const queryBinds = filter === 'all_active'
+    ? [...binds, todayLocal, limit, offset]
+    : [...binds, limit, offset];
+
+  const { results } = await c.env.DB.prepare(sql).bind(...queryBinds).all();
   return c.json({ companies: results || [] }, 200, { 'Cache-Control': 'no-store' });
 });
 

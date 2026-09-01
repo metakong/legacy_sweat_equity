@@ -38,11 +38,13 @@ pipeline.get('/', async (c) => {
   const includeSnoozed = url.searchParams.get('include_snoozed') === '1' || url.searchParams.get('snoozed') === '1';
   const limitRaw = Number(url.searchParams.get('limit'));
   const limit = Number.isInteger(limitRaw) && limitRaw > 0 && limitRaw <= 1000 ? limitRaw : 500;
+  const offsetRaw = Number(url.searchParams.get('offset'));
+  const offset = Number.isInteger(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
 
   const today = businessDate();
 
   const where = [];
-  const binds = [today, today]; // For julianday days_in_stage calculation
+  const binds = [];
 
   where.push('c.agent_email = ?');
   binds.push(userEmail);
@@ -57,30 +59,28 @@ pipeline.get('/', async (c) => {
     binds.push(stage);
   }
 
-  binds.push(limit);
-
   const sql = `
     WITH latest AS (
       SELECT
         a.company_id,
+        a.agent_email,
         a.log_id AS latest_log_id,
         a.timestamp AS latest_timestamp,
         a.disposition AS latest_disposition,
         a.next_action_date,
         a.next_action_text,
         a.ai_structured_notes,
-        ROW_NUMBER() OVER (PARTITION BY a.company_id ORDER BY a.timestamp DESC) AS rn
+        ROW_NUMBER() OVER (PARTITION BY a.company_id, a.agent_email ORDER BY a.timestamp DESC) AS rn
       FROM activity_logs a
-      WHERE a.agent_email = '${userEmail}'
     ),
     agg AS (
       SELECT
         company_id,
+        agent_email,
         COUNT(*) AS touch_count,
         MAX(timestamp) AS last_touched
       FROM activity_logs
-      WHERE agent_email = '${userEmail}'
-      GROUP BY company_id
+      GROUP BY company_id, agent_email
     )
     SELECT
       c.company_id,
@@ -110,16 +110,16 @@ pipeline.get('/', async (c) => {
       l.next_action_date,
       l.next_action_text,
       json_extract(l.ai_structured_notes, '$.summary') AS latest_summary,
-      CAST(ROUND(julianday(?) - julianday(COALESCE(c.stage_entered_at, c.created_at, ?))) AS INTEGER) AS days_in_stage
+      CAST(ROUND(julianday('${today}') - julianday(COALESCE(c.stage_entered_at, c.created_at, '${today}'))) AS INTEGER) AS days_in_stage
     FROM companies c
-    LEFT JOIN latest l ON c.company_id = l.company_id AND l.rn = 1
-    LEFT JOIN agg ON c.company_id = agg.company_id
+    LEFT JOIN latest l ON c.company_id = l.company_id AND c.agent_email = l.agent_email AND l.rn = 1
+    LEFT JOIN agg ON c.company_id = agg.company_id AND c.agent_email = agg.agent_email
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY c.pipeline_stage, days_in_stage DESC, c.company_name COLLATE NOCASE
-    LIMIT ?
+    LIMIT ? OFFSET ?
   `;
 
-  const { results } = await c.env.DB.prepare(sql).bind(...binds).all();
+  const { results } = await c.env.DB.prepare(sql).bind(...binds, limit, offset).all();
   const rows = Array.isArray(results) ? results : [];
 
   return c.json({

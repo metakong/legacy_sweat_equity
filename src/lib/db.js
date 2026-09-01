@@ -172,7 +172,7 @@ export async function setCompanyRating(db, companyId, rating, userEmail) {
   const canonical = matchEnum(rating, RATINGS);
   if (!canonical) return null;
   await db.prepare('UPDATE companies SET rating = ? WHERE company_id = ? AND agent_email = ?')
-    .bind(canonical, companyId)
+    .bind(canonical, companyId, userEmail)
     .run();
   return canonical;
 }
@@ -198,7 +198,7 @@ export async function setCompanyRenewalDate(db, companyId, renewalDate, userEmai
   const date = asIsoDate(renewalDate);
   if (!date || !companyId) return null;
   await db.prepare('UPDATE companies SET renewal_date = ? WHERE company_id = ? AND agent_email = ?')
-    .bind(date, companyId)
+    .bind(date, companyId, userEmail)
     .run();
   return date;
 }
@@ -255,7 +255,7 @@ export async function autoAdvancePipelineStage(db, companyId, targetStage, userE
   if (!canonicalStage) return null;
 
   const current = await db.prepare(
-    'SELECT pipeline_stage FROM companies WHERE company_id = ? AND agent_email = ? AND agent_email = ? LIMIT 1'
+    'SELECT pipeline_stage FROM companies WHERE company_id = ? AND agent_email = ? LIMIT 1'
   ).bind(companyId, userEmail).first();
 
   if (!current) return null;
@@ -274,13 +274,13 @@ export async function autoAdvancePipelineStage(db, companyId, targetStage, userE
     UPDATE companies
     SET pipeline_stage = ?,
         stage_entered_at = datetime('now')
-    WHERE company_id = ?
-  `).bind(canonicalStage, companyId).run();
+    WHERE company_id = ? AND agent_email = ?
+  `).bind(canonicalStage, companyId, userEmail).run();
 
   await db.prepare(`
-    INSERT INTO pipeline_events (event_id, company_id, from_stage, to_stage, changed_at, trigger_log_id, reason)
-    VALUES (?, ?, ?, ?, datetime('now'), ?, ?)
-  `).bind(eventId, companyId, fromStage, canonicalStage, logId ?? null, reason ?? null).run();
+    INSERT INTO pipeline_events (event_id, company_id, from_stage, to_stage, changed_at, trigger_log_id, reason, agent_email)
+    VALUES (?, ?, ?, ?, datetime('now'), ?, ?, ?)
+  `).bind(eventId, companyId, fromStage, canonicalStage, logId ?? null, reason ?? null, userEmail).run();
 
   return { event_id: eventId, company_id: companyId, from_stage: fromStage, to_stage: canonicalStage };
 }
@@ -314,19 +314,20 @@ export async function transitionPipelineStage(db, { companyId, toStage, reason =
         forecast_ap = COALESCE(?, forecast_ap),
         forecast_confidence = COALESCE(?, forecast_confidence),
         disqualified_reason = ?
-    WHERE company_id = ?
+    WHERE company_id = ? AND agent_email = ?
   `).bind(
     canonicalStage,
     validatedAp,
     validatedConf,
     canonicalStage === 'DISQUALIFIED' ? cleanReason : null,
-    companyId
+    companyId,
+    userEmail
   ).run();
 
   await db.prepare(`
-    INSERT INTO pipeline_events (event_id, company_id, from_stage, to_stage, changed_at, trigger_log_id, reason)
-    VALUES (?, ?, ?, ?, datetime('now'), NULL, ?)
-  `).bind(eventId, companyId, fromStage, canonicalStage, cleanReason).run();
+    INSERT INTO pipeline_events (event_id, company_id, from_stage, to_stage, changed_at, trigger_log_id, reason, agent_email)
+    VALUES (?, ?, ?, ?, datetime('now'), NULL, ?, ?)
+  `).bind(eventId, companyId, fromStage, canonicalStage, cleanReason, userEmail).run();
 
   return {
     event_id: eventId,
@@ -348,10 +349,10 @@ export async function snoozeCompany(db, companyId, untilDate, userEmail) {
   const until = untilDate ? asIsoDate(untilDate) : null;
   if (untilDate && !until) throw new ValidationError('Invalid date format for until (YYYY-MM-DD expected)');
 
-  const exists = await db.prepare('SELECT company_id FROM companies WHERE company_id = ? LIMIT 1').bind(companyId, userEmail).first();
+  const exists = await db.prepare('SELECT company_id FROM companies WHERE company_id = ? AND agent_email = ? LIMIT 1').bind(companyId, userEmail).first();
   if (!exists) throw new ValidationError('Company not found');
 
-  await db.prepare('UPDATE companies SET snoozed_until = ? WHERE company_id = ? AND agent_email = ?').bind(until, companyId).run();
+  await db.prepare('UPDATE companies SET snoozed_until = ? WHERE company_id = ? AND agent_email = ?').bind(until, companyId, userEmail).run();
   return { company_id: companyId, snoozed_until: until };
 }
 
@@ -554,7 +555,7 @@ export async function upsertActivityLog(db, log, userEmail) {
 export async function companyExists(db, companyId, userEmail) {
   userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
   const row = await db.prepare('SELECT 1 AS ok FROM companies WHERE company_id = ? AND agent_email = ? LIMIT 1')
-    .bind(companyId)
+    .bind(companyId, userEmail)
     .first();
   return Boolean(row);
 }

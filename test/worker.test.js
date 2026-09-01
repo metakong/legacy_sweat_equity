@@ -1230,6 +1230,138 @@ test('POST /api/enrich constructs clean search query and injects CRM context', a
   }
 });
 
+test('GET /api/companies parameter bindings align for all_active filter and default queries', async () => {
+  let capturedBinds = null;
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          capturedBinds = args;
+          return {
+            async all() {
+              return { results: [{ company_id: 'c1', company_name: 'Test Co' }] };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const todayLocal = businessDate();
+
+  // 1. filter=all_active
+  const resAllActive = await app.request('/api/companies?filter=all_active&limit=10&offset=5', {
+    method: 'GET'
+  }, { DB: mockDb });
+  assert.equal(resAllActive.status, 200);
+  assert.deepEqual(capturedBinds, ['sean_deardorff@us.aflac.com', todayLocal, 10, 5]);
+
+  // 2. default / no filter
+  const resDefault = await app.request('/api/companies?limit=25&offset=0', {
+    method: 'GET'
+  }, { DB: mockDb });
+  assert.equal(resDefault.status, 200);
+  assert.deepEqual(capturedBinds, ['sean_deardorff@us.aflac.com', 25, 0]);
+});
+
+test('GET /api/activity binds userEmail as first parameter along with limit and offset', async () => {
+  let capturedBinds = null;
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          capturedBinds = args;
+          return {
+            async all() {
+              return { results: [{ log_id: 'log-1', disposition: 'Enrolled' }] };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const res = await app.request('/api/activity?all=1&limit=50&offset=10', {
+    method: 'GET'
+  }, { DB: mockDb });
+  assert.equal(res.status, 200);
+  assert.deepEqual(capturedBinds, ['sean_deardorff@us.aflac.com', 50, 10]);
+});
+
+test('GET /api/pipeline and GET /api/pipeline/events/:companyId bind userEmail correctly', async () => {
+  let pipelineBinds = null;
+  let eventBinds = null;
+
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          if (sql.includes('pipeline_events')) {
+            eventBinds = args;
+          } else {
+            pipelineBinds = args;
+          }
+          return {
+            async all() {
+              return { results: [{ company_id: 'comp-1' }] };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  // GET /api/pipeline
+  const pipeRes = await app.request('/api/pipeline?include_snoozed=1&limit=100&offset=0', {
+    method: 'GET'
+  }, { DB: mockDb });
+  assert.equal(pipeRes.status, 200);
+  assert.deepEqual(pipelineBinds, ['sean_deardorff@us.aflac.com', 100, 0]);
+
+  // GET /api/pipeline/events/:companyId
+  const eventRes = await app.request('/api/pipeline/events/comp-1', {
+    method: 'GET'
+  }, { DB: mockDb });
+  assert.equal(eventRes.status, 200);
+  assert.deepEqual(eventBinds, ['comp-1', 'sean_deardorff@us.aflac.com']);
+});
+
+test('GET /api/exports/tier1 and /api/exports/tier2 bind userEmail correctly', async () => {
+  let tier1Binds = null;
+  let tier2Binds = null;
+
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          if (sql.includes('d365_lead_id IS NOT NULL')) {
+            tier2Binds = args;
+          } else {
+            tier1Binds = args;
+          }
+          return {
+            async all() {
+              return { results: [] };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const res1 = await app.request('/api/exports/tier1?all=1', {
+    method: 'GET'
+  }, { DB: mockDb });
+  assert.equal(res1.status, 200);
+  assert.deepEqual(tier1Binds, ['sean_deardorff@us.aflac.com']);
+
+  const res2 = await app.request('/api/exports/tier2?all=1', {
+    method: 'GET'
+  }, { DB: mockDb });
+  assert.equal(res2.status, 200);
+  assert.deepEqual(tier2Binds, ['sean_deardorff@us.aflac.com']);
+});
+
 
 
 
