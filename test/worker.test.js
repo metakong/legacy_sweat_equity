@@ -1486,6 +1486,44 @@ test('GET /api/radar validates query parameters and handles Overpass responses',
   }
 });
 
+test('GET /api/radar gracefully fails over to secondary Overpass endpoint on primary failure', async () => {
+  const attemptedUrls = [];
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      attemptedUrls.push(url);
+      if (typeof url === 'string' && url.startsWith('https://overpass-api.de')) {
+        throw new Error('Primary connection dropped');
+      }
+      if (typeof url === 'string' && url.startsWith('https://lz4.overpass-api.de')) {
+        return new Response(JSON.stringify({
+          elements: [
+            {
+              type: 'way',
+              id: 201,
+              center: { lat: 37.2100, lon: -93.2900 },
+              tags: { name: 'Ozark Precision Machining', industrial: 'factory' }
+            }
+          ]
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ elements: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    const res = await app.request('/api/radar?lat=37.2089&lng=-93.2923', { method: 'GET' });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.length, 1);
+    assert.equal(data[0].name, 'Ozark Precision Machining');
+    assert.equal(data[0].lat, 37.2100);
+    assert.equal(data[0].lng, -93.2900);
+    assert.ok(attemptedUrls.length >= 2, 'Should attempt secondary server when primary fails');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
 
 
 

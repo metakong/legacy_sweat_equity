@@ -8,6 +8,23 @@
 
 ---
 
+## 2026-09-01 14:30 UTC (2026-09-01 09:30 CDT) — Radar Scan: 1-Mile Radius, NWR Building Polygons & Multi-Server Failover
+
+### Session Goal
+Enhance OpenStreetMap Overpass API radar integration by expanding radius to 1 mile (1609m), querying `nwr` (Node, Way, Relation) building polygons and healthcare/industrial sectors, and adding multi-server fallback across multiple public Overpass instances to prevent dropped requests.
+
+### Execution Summary
+- **Phase 1: Overpass Query Expansion (`src/routes/radar.js`)**
+  - Expanded search radius from 500m to 1609m (1 mile).
+  - Switched query from `node` to `nwr` across `amenity`, `shop`, `office`, `craft`, `healthcare`, `industrial`.
+  - Increased query timeout to 25 seconds for broader area coverage.
+- **Phase 2: Multi-Server Failover (`src/routes/radar.js`)**
+  - Added resilient fallback loop across 3 public Overpass endpoints (`overpass-api.de`, `lz4.overpass-api.de`, `overpass.kumi.systems`).
+  - Seamlessly cycles to next available endpoint on connection drops or timeouts.
+- **Phase 3: Automated Testing & Sync**
+  - Added test in `test/worker.test.js` validating multi-server failover logic on primary instance error.
+  - All **127 tests** pass (`npm test`).
+
 ## 2026-09-01 14:15 UTC (2026-09-01 09:15 CDT) — Radar Scan: Leaflet Overpass API Commercial POI Discovery
 
 ### Session Goal
