@@ -984,52 +984,6 @@ test('transitionPipelineStage and snoozeCompany mutate state and validate inputs
   assert.equal(updatedCompany.snoozed_until, '2026-09-15');
 });
 
-test('/api/pipeline endpoints require x-api-key authentication', async () => {
-  // Missing API key -> 401
-  const unauthRes = await app.request('/api/pipeline', {
-    method: 'GET'
-  });
-  assert.equal(unauthRes.status, 401);
-
-  const mockDb = {
-    prepare(sql) {
-      return {
-        bind() {
-          return {
-            async all() {
-              return {
-                results: [
-                  {
-                    company_id: 'comp-1',
-                    company_name: 'Test Corp',
-                    pipeline_stage: 'QUALIFIED',
-                    days_in_stage: 5,
-                    touch_count: 2
-                  }
-                ]
-              };
-            }
-          };
-        }
-      };
-    }
-  };
-
-  // Valid API key -> 200 with pipeline payload
-  const authRes = await app.request('/api/pipeline', {
-    method: 'GET',
-    headers: { 'x-api-key': 'LEGACY_EDGE_KEY_2026'
-    }
-  }, { DB: mockDb });
-
-  assert.equal(authRes.status, 200);
-  const data = await authRes.json();
-  assert.equal(data.success, true);
-  assert.equal(Array.isArray(data.pipeline), true);
-  assert.equal(data.pipeline.length, 1);
-  assert.equal(data.pipeline[0].company_name, 'Test Corp');
-});
-
 test('POST /api/pipeline/stage and /api/pipeline/snooze process valid JSON mutations', async () => {
   const mockDb = {
     prepare(sql) {

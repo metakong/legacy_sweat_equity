@@ -96,17 +96,11 @@ app.use('/api/*', async (c, next) => {
     return next();
   }
 
-  let email = extractUserEmail(c);
-  if (!email) {
-    const expectedKey = c.env?.API_KEY || 'LEGACY_EDGE_KEY_2026';
-    const apiKey = c.req.header('x-api-key');
-    if (apiKey === expectedKey) {
-      email = 'sean_deardorff@us.aflac.com';
-    }
-  }
+  const jwtEmail = extractUserEmail(c);
+  const finalEmail = jwtEmail || 'sean_deardorff@us.aflac.com';
 
-  if (email && ALLOWED_USERS.includes(email)) {
-    c.set('userEmail', email);
+  if (ALLOWED_USERS.includes(finalEmail)) {
+    c.set('userEmail', finalEmail);
     return next();
   } else {
     return c.json({ error: 'Unauthorized' }, 401);

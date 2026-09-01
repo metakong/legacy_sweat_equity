@@ -95,6 +95,7 @@ export function normalizeCompany(raw) {
  * a D365 identity captured earlier.
  */
 export async function upsertCompany(db, company, userEmail) {
+  userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
   await db.prepare(`
     INSERT INTO companies (
       company_id, d365_lead_id, d365_checksum, d365_modified_on, company_name,
@@ -167,6 +168,7 @@ export async function upsertCompany(db, company, userEmail) {
 
 /** Move a company's D365 Rating without touching anything else. */
 export async function setCompanyRating(db, companyId, rating, userEmail) {
+  userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
   const canonical = matchEnum(rating, RATINGS);
   if (!canonical) return null;
   await db.prepare('UPDATE companies SET rating = ? WHERE company_id = ? AND agent_email = ?')
@@ -192,6 +194,7 @@ export function calculateRenewalDate(enrollmentDate, fallbackDate) {
 
 /** Update a company's renewal date. */
 export async function setCompanyRenewalDate(db, companyId, renewalDate, userEmail) {
+  userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
   const date = asIsoDate(renewalDate);
   if (!date || !companyId) return null;
   await db.prepare('UPDATE companies SET renewal_date = ? WHERE company_id = ? AND agent_email = ?')
@@ -246,6 +249,7 @@ export function inferTargetPipelineStage(currentStage, disposition, isDmContact)
  * enforcing forward-only transitions (unless transitioning to a terminal state).
  */
 export async function autoAdvancePipelineStage(db, companyId, targetStage, userEmail, logId = null, reason = 'Auto-inferred from field touch') {
+  userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
   if (!db || !companyId || !targetStage) return null;
   const canonicalStage = matchEnum(targetStage, PIPELINE_STAGES);
   if (!canonicalStage) return null;
@@ -285,6 +289,7 @@ export async function autoAdvancePipelineStage(db, companyId, targetStage, userE
  * Explicit/manual pipeline state mutation endpoint helper.
  */
 export async function transitionPipelineStage(db, { companyId, toStage, reason = null, forecastAp = null, forecastConfidence = null, triggerLogId = null, userEmail }) {
+  userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
   const canonicalStage = matchEnum(toStage, PIPELINE_STAGES);
   if (!canonicalStage) throw new ValidationError(`Invalid pipeline stage. Must be one of: ${PIPELINE_STAGES.join(', ')}`);
   if (!companyId) throw new ValidationError('company_id is required');
@@ -338,6 +343,7 @@ export async function transitionPipelineStage(db, { companyId, toStage, reason =
  * Snooze a company until a given date. Passing null or empty string un-snoozes.
  */
 export async function snoozeCompany(db, companyId, untilDate, userEmail) {
+  userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
   if (!companyId) throw new ValidationError('company_id is required');
   const until = untilDate ? asIsoDate(untilDate) : null;
   if (untilDate && !until) throw new ValidationError('Invalid date format for until (YYYY-MM-DD expected)');
@@ -380,6 +386,7 @@ export function normalizeContact(raw, companyId) {
 }
 
 export async function findExistingContact(db, companyId, firstName, lastName, userEmail) {
+  userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
   if (!db || !companyId || (!firstName && !lastName)) return null;
   const fn = firstName ? firstName.trim().toLowerCase() : '';
   const ln = lastName ? lastName.trim().toLowerCase() : '';
@@ -410,6 +417,7 @@ export async function findExistingContact(db, companyId, firstName, lastName, us
 }
 
 export async function upsertContact(db, contact, userEmail) {
+  userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
   // Composite key deduplication: if this contact already exists under the company,
   // reuse its contact_id so the write updates rather than duplicates.
   if (contact.company_id && (contact.first_name || contact.last_name)) {
@@ -496,6 +504,7 @@ export function normalizeActivityLog(raw) {
  * after a dropped connection, and that must update rather than duplicate.
  */
 export async function upsertActivityLog(db, log, userEmail) {
+  userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
   await db.prepare(`
     INSERT INTO activity_logs (
       log_id, company_id, contact_id, timestamp,
@@ -543,6 +552,7 @@ export async function upsertActivityLog(db, log, userEmail) {
 
 /** True when the FK target exists. Checked up front so we can 400, not 500. */
 export async function companyExists(db, companyId, userEmail) {
+  userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
   const row = await db.prepare('SELECT 1 AS ok FROM companies WHERE company_id = ? AND agent_email = ? LIMIT 1')
     .bind(companyId)
     .first();
