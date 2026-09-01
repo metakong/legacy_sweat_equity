@@ -8,6 +8,25 @@
 
 ---
 
+## 2026-09-01 14:45 UTC (2026-09-01 09:45 CDT) — Radar Scan: Address Extraction & Target Account Offline Queue Preservation
+
+### Session Goal
+Extract detailed address properties (`addr:housenumber`, `addr:street`, `addr:city`, `addr:state`, `addr:postcode`) from OpenStreetMap Overpass API elements, auto-populate the Field Tab inputs upon marker tap, and preserve the complete address inside the offline IndexedDB `company_creation` queue payload.
+
+### Execution Summary
+- **Phase 1: Radar API Address Extraction (`src/routes/radar.js`)**
+  - Extracted `street_1` (`addr:housenumber` + `addr:street`), `city`, `state`, and `zip_code` from `el.tags`.
+  - Enriched the radar JSON payload with these normalized address fields alongside coordinates and name.
+- **Phase 2: Target Account UI Auto-Population (`public/app/field.js`)**
+  - Updated `initRadarScan()` marker click handler to pass `street_1`, `city`, `state`, and `zip_code` into `selectCompany()`.
+  - Populates DOM form inputs automatically via `applyCompany()`.
+- **Phase 3: Address Preservation in Offline Queue (`public/app/field.js`)**
+  - Updated `company_creation` payload construction in `initSave()` to include `street_1`, `city`, `state`, and `zip_code`.
+  - Ensures net-new target creation requests contain the complete address for database upsert.
+- **Phase 4: Validation & Sync**
+  - Updated `test/worker.test.js` to assert address fields in radar response.
+  - All **127 tests** pass (`npm test`).
+
 ## 2026-09-01 14:30 UTC (2026-09-01 09:30 CDT) — Radar Scan: 1-Mile Radius, NWR Building Polygons & Multi-Server Failover
 
 ### Session Goal

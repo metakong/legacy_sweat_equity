@@ -1173,6 +1173,10 @@ function initSave() {
           payload: {
             company_id: state.selectedCompany.company_id,
             company_name: state.selectedCompany.company_name,
+            street_1: $('streetInput')?.value?.trim() || state.selectedCompany.street_1 || null,
+            city: $('cityInput')?.value?.trim() || state.selectedCompany.city || null,
+            state: $('stateInput')?.value?.trim() || state.selectedCompany.state || null,
+            zip_code: $('zipInput')?.value?.trim() || state.selectedCompany.zip_code || null,
             lat: state.selectedCompany.lat,
             lng: state.selectedCompany.lng ?? state.selectedCompany.long
           }
@@ -1268,7 +1272,7 @@ function initRadarScan() {
       }
 
       if (pois.length === 0) {
-        showToast('Radar found no new commercial POIs within 500m.', 'info');
+        showToast('Radar found no new commercial POIs within 1 mile.', 'info');
         return;
       }
 
@@ -1288,6 +1292,10 @@ function initRadarScan() {
           selectCompany({
             company_id: crypto.randomUUID(),
             company_name: poi.name,
+            street_1: poi.street_1 || '',
+            city: poi.city || '',
+            state: poi.state || '',
+            zip_code: poi.zip_code || '',
             lat: poi.lat,
             lng: poi.lng,
             isNew: true

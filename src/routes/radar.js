@@ -71,8 +71,17 @@ export async function handleRadar(c) {
     if (seen.has(key)) continue;
     seen.add(key);
 
+    const street1 = [el.tags?.['addr:housenumber'], el.tags?.['addr:street']].filter(Boolean).join(' ');
+    const city = el.tags?.['addr:city'] || '';
+    const state = el.tags?.['addr:state'] || '';
+    const zip_code = el.tags?.['addr:postcode'] || '';
+
     results.push({
       name,
+      street_1: street1,
+      city,
+      state,
+      zip_code,
       lat: elLat,
       lng: elLng
     });

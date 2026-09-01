@@ -1450,7 +1450,15 @@ test('GET /api/radar validates query parameters and handles Overpass responses',
               id: 101,
               lat: 37.2091,
               lon: -93.2915,
-              tags: { name: 'Springfield Law Office', office: 'lawyer' }
+              tags: {
+                name: 'Springfield Law Office',
+                office: 'lawyer',
+                'addr:housenumber': '101',
+                'addr:street': 'E Commercial St',
+                'addr:city': 'Springfield',
+                'addr:state': 'MO',
+                'addr:postcode': '65803'
+              }
             },
             {
               type: 'node',
@@ -1478,9 +1486,14 @@ test('GET /api/radar validates query parameters and handles Overpass responses',
     assert.ok(Array.isArray(data));
     assert.equal(data.length, 2);
     assert.equal(data[0].name, 'Springfield Law Office');
+    assert.equal(data[0].street_1, '101 E Commercial St');
+    assert.equal(data[0].city, 'Springfield');
+    assert.equal(data[0].state, 'MO');
+    assert.equal(data[0].zip_code, '65803');
     assert.equal(data[0].lat, 37.2091);
     assert.equal(data[0].lng, -93.2915);
     assert.equal(data[1].name, 'Ozark Coffee Roasters');
+    assert.equal(data[1].street_1, '');
   } finally {
     globalThis.fetch = originalFetch;
   }
