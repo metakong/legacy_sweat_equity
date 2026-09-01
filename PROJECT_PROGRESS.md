@@ -8,6 +8,29 @@
 
 ---
 
+## 2026-09-01 14:15 UTC (2026-09-01 09:15 CDT) — Radar Scan: Leaflet Overpass API Commercial POI Discovery
+
+### Session Goal
+Replace the non-viable vector `queryRenderedFeatures` POI map click listener on raster Leaflet tiles with an interactive "Radar Scan" using OpenStreetMap Overpass API (`GET /api/radar`) to discover and plot uncharted B2B targets within 500m.
+
+### Execution Summary
+- **Phase 1: Radar API Route (`src/routes/radar.js` & `src/index.js`)**
+  - Created `src/routes/radar.js` with `handleRadar(c)` validating `lat` and `lng` query parameters.
+  - Queries Overpass API `amenity`, `shop`, `office`, `craft` nodes within 500m radius of center coordinates.
+  - Formats, filters, deduplicates and returns cleaned `[{ name, lat, lng }]` payload.
+  - Mounted route at `/api/radar` in `src/index.js`.
+- **Phase 2: Frontend Radar UI (`public/app/index.html` & `public/app/app.css`)**
+  - Added `#btnRadarScan` floating button over `#map` inside `#view-field`.
+  - Added One UI dark theme glassmorphism styling and custom radar pin dot styles in `app.css`.
+- **Phase 3: Frontend Radar Logic & Pinning (`public/app/field.js`)**
+  - Removed old raster-incompatible vector click listener.
+  - Added `initRadarScan()` triggering `GET /api/radar?lat=...&lng=...` from current map center.
+  - Plotted interactive grey `custom-radar-pin` markers onto `radarLayer`.
+  - Clicking any radar pin populates the Target Account form as a net-new POI target (`isNew: true`) ready for seamless offline queue creation and activity logging.
+- **Phase 4: Dual Synchronization & Validation**
+  - Added unit test in `test/worker.test.js` validating `/api/radar` parameter handling and Overpass parsing.
+  - All **126 tests** pass (`npm test`).
+
 ## 2026-09-01 13:45 UTC (2026-09-01 08:45 CDT) — Visual Prospecting: Mapbox POI Interception & Offline Company Creation Queue
 
 ### Session Goal

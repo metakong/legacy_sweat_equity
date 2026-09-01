@@ -139,6 +139,71 @@ header h1 span {
   z-index: 1;
 }
 
+.map-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.btn-radar-scan {
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.6rem 1.25rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: transform 0.15s ease, background 0.2s ease, box-shadow 0.2s ease;
+  touch-action: manipulation;
+}
+
+.btn-radar-scan:hover {
+  background: rgba(30, 41, 59, 0.98);
+  border-color: rgba(77, 138, 240, 0.5);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.65);
+}
+
+.btn-radar-scan:active {
+  transform: translateX(-50%) scale(0.95) !important;
+}
+
+.radar-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.7));
+  cursor: pointer;
+}
+
+.radar-pin-dot {
+  width: 28px;
+  height: 28px;
+  background: #334155;
+  border: 2px solid #94a3b8;
+  border-radius: 50%;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  transition: transform 0.15s ease, background 0.15s ease;
+  cursor: pointer;
+}
+
+.radar-pin-dot:hover, .radar-pin-dot:active {
+  transform: scale(1.25);
+  background: #475569;
+  border-color: var(--accent-gold);
+}
+
 /* Shown when Leaflet could not be fetched (cold offline start). Logging still
    works, so the slot degrades to a readable notice instead of a void. */
 .map-unavailable {

@@ -1433,6 +1433,60 @@ test('POST /api/companies/import successfully processes company_creation offline
   assert.equal(inserted[0].args[11], -93.2923);
 });
 
+test('GET /api/radar validates query parameters and handles Overpass responses', async () => {
+  // 1. Missing parameters -> 400
+  const badRes = await app.request('/api/radar', { method: 'GET' });
+  assert.equal(badRes.status, 400);
+
+  // 2. Mock Overpass API response
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      if (typeof url === 'string' && url.includes('overpass-api.de')) {
+        return new Response(JSON.stringify({
+          elements: [
+            {
+              type: 'node',
+              id: 101,
+              lat: 37.2091,
+              lon: -93.2915,
+              tags: { name: 'Springfield Law Office', office: 'lawyer' }
+            },
+            {
+              type: 'node',
+              id: 102,
+              lat: 37.2085,
+              lon: -93.2930,
+              tags: { name: 'Ozark Coffee Roasters', shop: 'coffee' }
+            },
+            {
+              type: 'node',
+              id: 103,
+              lat: 37.2070,
+              lon: -93.2940,
+              tags: { amenity: 'bench' } // No name -> should be filtered out
+            }
+          ]
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return originalFetch(url);
+    };
+
+    const goodRes = await app.request('/api/radar?lat=37.2089&lng=-93.2923', { method: 'GET' });
+    assert.equal(goodRes.status, 200);
+    const data = await goodRes.json();
+    assert.ok(Array.isArray(data));
+    assert.equal(data.length, 2);
+    assert.equal(data[0].name, 'Springfield Law Office');
+    assert.equal(data[0].lat, 37.2091);
+    assert.equal(data[0].lng, -93.2915);
+    assert.equal(data[1].name, 'Ozark Coffee Roasters');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
 
 
 

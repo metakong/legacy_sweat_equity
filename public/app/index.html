@@ -101,9 +101,10 @@
           <button class="filter-chip" type="button" data-filter="follow_ups" id="chip-follow-ups">Follow-Ups</button>
         </div>
 
-        <!-- role="region" rather than "application": the map is informational,
-             and "application" would trap screen readers out of browse mode -->
-        <div id="map" role="region" aria-label="Map showing your current position and nearby prospects"></div>
+        <div class="map-wrapper" style="position: relative;">
+          <div id="map" role="region" aria-label="Map showing your current position and nearby prospects"></div>
+          <button id="btnRadarScan" class="btn btn-dark shadow btn-radar-scan" type="button" style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 1000; border-radius: 20px;">📡 Scan Area</button>
+        </div>
 
         <main>
           <div class="panel sync-panel">

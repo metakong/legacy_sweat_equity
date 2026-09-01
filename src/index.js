@@ -37,6 +37,7 @@ import eodRouter from './routes/eod.js';
 import routingRouter from './routes/routing.js';
 import exportsRouter from './routes/exports.js';
 import pipelineRouter from './routes/pipeline.js';
+import radarRouter, { handleRadar } from './routes/radar.js';
 import { classifyIndustry } from './lib/ai.js';
 
 const app = new Hono();
@@ -122,6 +123,8 @@ app.route('/api/exports', exportsRouter);
 app.route('/api/pipeline', pipelineRouter);
 app.route('/api/audio', audioRouter);
 app.route('/api/activity', activityRouter);
+app.route('/api/radar', radarRouter);
+app.get('/api/radar', handleRadar);
 
 // /api/transcribe-and-log and /api/sync are part of the external contract and
 // live at the API root rather than under /api/activity.

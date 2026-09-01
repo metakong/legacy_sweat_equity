@@ -30,6 +30,7 @@ const state = {
 let userMarker = null;
 let fieldMap = null;
 let companyMarkersLayer = null;
+let radarLayer = null;
 let currentMapFilter = 'all_active';
 
 // ---------------------------------------------------------------------
@@ -209,55 +210,8 @@ function initMap() {
   initMapFilterChips();
   loadMapCompanies(currentMapFilter);
 
-  const map = fieldMap;
-  if (map && typeof map.on === 'function') {
-    const handlePoiClick = (e) => {
-      if (typeof map.queryRenderedFeatures !== 'function') return;
-      const point = e.point || (e.containerPoint ? [e.containerPoint.x, e.containerPoint.y] : null);
-      if (!point) return;
-      const features = map.queryRenderedFeatures(point, { layers: ['poi-label'] });
-      if (!features || !features.length) return;
-
-      const poi = features[0];
-      const poiName = poi.properties?.name;
-      if (!poiName) return;
-
-      // Generate a transient company object
-      const newCompany = {
-        company_id: crypto.randomUUID(),
-        company_name: poiName,
-        lat: e.lngLat ? e.lngLat.lat : (e.latlng ? e.latlng.lat : state.coords.lat),
-        lng: e.lngLat ? e.lngLat.lng : (e.latlng ? e.latlng.lng : state.coords.long),
-        isNew: true // Transient flag
-      };
-
-      selectCompany(newCompany);
-    };
-
-    map.on('click', handlePoiClick);
-    map.on('load', () => {
-      map.on('click', (e) => {
-        const features = typeof map.queryRenderedFeatures === 'function'
-          ? map.queryRenderedFeatures(e.point, { layers: ['poi-label'] })
-          : [];
-        if (!features || !features.length) return;
-
-        const poi = features[0];
-        const poiName = poi.properties?.name;
-        if (!poiName) return;
-
-        // Generate a transient company object
-        const newCompany = {
-          company_id: crypto.randomUUID(),
-          company_name: poiName,
-          lat: e.lngLat ? e.lngLat.lat : (e.latlng ? e.latlng.lat : state.coords.lat),
-          lng: e.lngLat ? e.lngLat.lng : (e.latlng ? e.latlng.lng : state.coords.long),
-          isNew: true // Transient flag
-        };
-
-        selectCompany(newCompany);
-      });
-    });
+  if (typeof L !== 'undefined' && fieldMap) {
+    radarLayer = L.layerGroup().addTo(fieldMap);
   }
 
   // The map is inside a tab panel; revealing it after layout leaves Leaflet
@@ -1288,8 +1242,78 @@ function initBroadcastSyncListener() {
   });
 }
 
+function initRadarScan() {
+  const btn = $('btnRadarScan');
+  if (!btn) return;
+
+  btn.addEventListener('click', async () => {
+    if (!fieldMap) {
+      showToast('Map is still initializing. Please wait.', 'info');
+      return;
+    }
+
+    const center = fieldMap.getCenter();
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '📡 Scanning…';
+
+    try {
+      const results = await apiFetch(`/api/radar?lat=${center.lat}&lng=${center.lng}`);
+      const pois = Array.isArray(results) ? results : (results.results || []);
+
+      if (radarLayer) {
+        radarLayer.clearLayers();
+      } else if (typeof L !== 'undefined' && fieldMap) {
+        radarLayer = L.layerGroup().addTo(fieldMap);
+      }
+
+      if (pois.length === 0) {
+        showToast('Radar found no new commercial POIs within 500m.', 'info');
+        return;
+      }
+
+      pois.forEach((poi) => {
+        if (poi.lat === undefined || poi.lng === undefined) return;
+
+        const icon = L.divIcon({
+          html: `<div class="radar-pin-dot" title="${poi.name || 'Target'}">🏢</div>`,
+          className: 'custom-radar-pin',
+          iconSize: [28, 28],
+          iconAnchor: [14, 14]
+        });
+
+        const marker = L.marker([poi.lat, poi.lng], { icon });
+
+        marker.on('click', () => {
+          selectCompany({
+            company_id: crypto.randomUUID(),
+            company_name: poi.name,
+            lat: poi.lat,
+            lng: poi.lng,
+            isNew: true
+          });
+          showToast(`Selected uncharted target: ${poi.name}`, 'info');
+        });
+
+        if (radarLayer) {
+          radarLayer.addLayer(marker);
+        }
+      });
+
+      showToast(`Radar: plotted ${pois.length} uncharted ${pois.length === 1 ? 'target' : 'targets'} nearby.`, 'success');
+    } catch (err) {
+      console.error('Radar scan failed:', err);
+      showToast('Radar scan failed. Check network connectivity.', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  });
+}
+
 export function initFieldView() {
   initMap();
+  initRadarScan();
   initNearestAccount();
   initCompanySearch();
   initInspect();
