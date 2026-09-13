@@ -21,6 +21,9 @@ import { initStore, initConnectivityWatch, onSynced } from './store.js';
 import { initFieldView } from './field.js';
 import { initDesktopViews, refreshActiveDesktopView } from './desktop.js';
 import { initPipelineView, fetchPipelineData } from './pipeline.js';
+import { initAudioQueueSync } from './modules/state.js';
+import { initVisibilityRecordingDefense } from './modules/audio.js';
+import { initNavigation, initializeTheme } from './modules/navigation.js';
 
 export { apiFetch, apiPost };
 
@@ -41,6 +44,23 @@ onViewOpen('pipeline', initPipelineView);
 // Land on the field log on every device. On mobile the sidebar is hidden by
 // CSS, so this is the only reachable view.
 activateView('field');
+
+// ---------------------------------------------------------------------
+// AGENCY OS FOUNDATION (Sprint 3)
+//
+// Three deliberate ordering decisions:
+//   * the theme is applied FIRST, before anything paints, so a high-contrast
+//     user never sees a dark flash outdoors;
+//   * the outbox listener and the suspension defense are inert until a capture
+//     actually exists — they cost nothing on a normal page load;
+//   * the mode controller returns null while #view-container is absent, so the
+//     current field log keeps running untouched. Sprint 4 adds the container
+//     and the Phone/Field/Triage buttons, and it activates on its own.
+// ---------------------------------------------------------------------
+initializeTheme();
+initAudioQueueSync();
+initVisibilityRecordingDefense();
+initNavigation();
 
 // A queue drain can change what the active tables should show.
 onSynced(() => {

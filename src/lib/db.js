@@ -30,6 +30,7 @@ import {
   deriveDisposition
 } from './validate.js';
 import { toSqlTimestamp } from './time.js';
+import { encodeGeohash } from './geo.js';
 
 /** A field is invalid in a way the caller must be told about. */
 export class ValidationError extends Error {
@@ -44,6 +45,15 @@ export class ValidationError extends Error {
 // ---------------------------------------------------------------------
 
 /**
+ * True only when a caller actually supplied a value, as opposed to omitting
+ * the key or sending an empty string. This is what separates "set status to
+ * ACTIVE" from "I did not mention status at all" on an upsert.
+ */
+function isSupplied(value) {
+  return value !== undefined && value !== null && String(value).trim() !== '';
+}
+
+/**
  * Validate and coerce a company payload into bindable primitives.
  * Throws ValidationError only for the two fields we genuinely cannot invent.
  */
@@ -52,6 +62,23 @@ export function normalizeCompany(raw) {
   if (!companyName) throw new ValidationError('company_name is required');
 
   const companyId = asId(raw?.company_id) || crypto.randomUUID();
+
+  // Both the terse and the descriptive coordinate aliases are accepted so the
+  // radar route, the markdown ingestion scripts, and the field PWA can post
+  // `lat`/`long`, `lat`/`lng`, or `latitude`/`longitude` without a shim layer.
+  const latitude = asLatitude(raw?.lat ?? raw?.latitude);
+  const longitude = asLongitude(raw?.long ?? raw?.lng ?? raw?.longitude);
+
+  // V2 Agency OS fields. Each normalized value carries a non-null default so a
+  // brand-new row satisfies its NOT NULL columns, but each also records a 0/1
+  // presence flag: upsertCompany needs to know whether the caller actually
+  // supplied the field before it overwrites a value that is already on the row.
+  const currentVoluntaryCarrier = cleanCapped(raw?.current_voluntary_carrier, 120) || 'None';
+  const majorMedicalCarrier = cleanCapped(raw?.major_medical_carrier, 120) || null;
+  const isHdhp = toBool(raw?.is_hdhp, 0);
+  const estimatedW2Count = asCount(raw?.estimated_w2_count, 5_000_000) ?? 0;
+  const confidenceScore = asCount(raw?.confidence_score, 100) ?? 30;
+  const status = (cleanCapped(raw?.status, 32) || 'ACTIVE').toUpperCase();
 
   return {
     company_id: companyId,
@@ -64,8 +91,8 @@ export function normalizeCompany(raw) {
     city: cleanCapped(raw?.city, LIMITS.city) || null,
     state: cleanCapped(raw?.state, LIMITS.state) || null,
     zip_code: cleanCapped(raw?.zip_code, LIMITS.zip) || null,
-    lat: asLatitude(raw?.lat) ?? null,
-    long: asLongitude(raw?.long ?? raw?.lng) ?? null,
+    lat: latitude,
+    long: longitude,
     lead_source: matchEnum(raw?.lead_source, LEAD_SOURCES) || null,
     rating: matchEnum(raw?.rating, RATINGS) || null,
     employees: asCount(raw?.employees, 5_000_000) ?? null,
@@ -80,6 +107,33 @@ export function normalizeCompany(raw) {
     disqualified_reason: cleanCapped(raw?.disqualified_reason, 500) || null,
     forecast_ap: asMoney(raw?.forecast_ap) ?? null,
     forecast_confidence: asCount(raw?.forecast_confidence, 100) ?? null,
+    // Field intelligence. `custom_1` / `custom_2` are the column names the
+    // markdown ingestion scripts emit; they are accepted as aliases so an
+    // existing importer keeps working, but the canonical names win.
+    company_phone: cleanCapped(raw?.company_phone ?? raw?.phone_number, LIMITS.phone) || null,
+    decision_maker: cleanCapped(raw?.decision_maker ?? raw?.custom_1, LIMITS.decisionMaker) || null,
+    notes: cleanCapped(raw?.notes ?? raw?.custom_2, LIMITS.notes, { allowNewlines: true }) || null,
+    // --- V2 Agency OS: Section 125, confidence, and spatial fields ---
+    current_voluntary_carrier: currentVoluntaryCarrier,
+    major_medical_carrier: majorMedicalCarrier,
+    is_hdhp: isHdhp,
+    estimated_w2_count: estimatedW2Count,
+    confidence_score: confidenceScore,
+    // Derived, never trusted from the caller: a hash supplied alongside a
+    // mismatched coordinate pair would file the account in the wrong cell and
+    // make it invisible to the radar that is supposed to find it.
+    geohash: latitude !== null && longitude !== null
+      ? encodeGeohash(latitude, longitude, 7)
+      : null,
+    status,
+    // Presence flags for upsertCompany. Numbers only — D1 cannot bind a
+    // boolean, and normalizeCompany is contractually primitives-only.
+    __has_current_voluntary_carrier: isSupplied(raw?.current_voluntary_carrier) ? 1 : 0,
+    __has_major_medical_carrier: isSupplied(raw?.major_medical_carrier) ? 1 : 0,
+    __has_is_hdhp: isSupplied(raw?.is_hdhp) ? 1 : 0,
+    __has_estimated_w2_count: isSupplied(raw?.estimated_w2_count) ? 1 : 0,
+    __has_confidence_score: isSupplied(raw?.confidence_score) ? 1 : 0,
+    __has_status: isSupplied(raw?.status) ? 1 : 0,
     // A record only counts as synced once it carries the D365 identity that
     // proves it round-tripped. Trusting a client-sent flag here is how
     // net-new leads silently drop out of the Tier 3 export.
@@ -103,8 +157,15 @@ export async function upsertCompany(db, company, userEmail) {
       lead_source, rating, employees, industry,
       sic_code, account_number, post_enrollment_date,
       renewal_date, pipeline_stage, stage_entered_at, snoozed_until,
-      disqualified_reason, forecast_ap, forecast_confidence, is_d365_synced, agent_email
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      disqualified_reason, forecast_ap, forecast_confidence, is_d365_synced,
+      company_phone, decision_maker, notes,
+      current_voluntary_carrier, major_medical_carrier, is_hdhp,
+      estimated_w2_count, confidence_score, geohash, status,
+      agent_email
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    )
     ON CONFLICT(company_id, agent_email) DO UPDATE SET
       d365_lead_id        = COALESCE(excluded.d365_lead_id, companies.d365_lead_id),
       d365_checksum       = COALESCE(excluded.d365_checksum, companies.d365_checksum),
@@ -115,8 +176,14 @@ export async function upsertCompany(db, company, userEmail) {
       city                = COALESCE(excluded.city, companies.city),
       state               = COALESCE(excluded.state, companies.state),
       zip_code            = COALESCE(excluded.zip_code, companies.zip_code),
-      lat                 = COALESCE(companies.lat, excluded.lat),
-      long                = COALESCE(companies.long, excluded.long),
+      -- Incoming coordinates win when they are actually supplied; a payload
+      -- that omits them (excluded.* IS NULL) still keeps what we hold. The
+      -- old order was existing-first, which meant a row geocoded to the wrong
+      -- rooftop could never be corrected through ANY import path — the agent
+      -- had to edit D1 by hand. handleImport only geocodes accounts that lack
+      -- coordinates, so this does not re-geocode on every re-import.
+      lat                 = COALESCE(excluded.lat, companies.lat),
+      long                = COALESCE(excluded.long, companies.long),
       lead_source         = COALESCE(excluded.lead_source, companies.lead_source),
       rating              = COALESCE(excluded.rating, companies.rating),
       employees           = COALESCE(excluded.employees, companies.employees),
@@ -131,7 +198,39 @@ export async function upsertCompany(db, company, userEmail) {
       disqualified_reason = COALESCE(excluded.disqualified_reason, companies.disqualified_reason),
       forecast_ap         = COALESCE(excluded.forecast_ap, companies.forecast_ap),
       forecast_confidence = COALESCE(excluded.forecast_confidence, companies.forecast_confidence),
-      is_d365_synced      = MAX(excluded.is_d365_synced, companies.is_d365_synced)
+      is_d365_synced      = MAX(excluded.is_d365_synced, companies.is_d365_synced),
+      company_phone       = COALESCE(excluded.company_phone, companies.company_phone),
+      decision_maker      = COALESCE(excluded.decision_maker, companies.decision_maker),
+      -- Notes ACCUMULATE. Each enrichment pass is a new observation about a
+      -- live account, not a correction of the last one, so overwriting would
+      -- destroy the history the agent is actually working from. The instr()
+      -- guard keeps this idempotent: re-running the same import appends
+      -- nothing, so a retried batch cannot balloon the field.
+      notes = CASE
+        WHEN excluded.notes IS NULL OR TRIM(excluded.notes) = '' THEN companies.notes
+        WHEN companies.notes IS NULL OR TRIM(companies.notes) = '' THEN excluded.notes
+        WHEN instr(companies.notes, excluded.notes) > 0 THEN companies.notes
+        ELSE companies.notes || char(10) || char(10) || excluded.notes
+      END,
+      -- V2 Agency OS fields. The defaults above keep a NEW row valid, so the
+      -- presence flags below are what stop a quick field re-log from resetting
+      -- a phone-verified confidence score back to 30 or clearing a
+      -- DO_NOT_CONTACT suppression. Bind order: the six flags are positional
+      -- parameters appearing after the 38 INSERT values.
+      current_voluntary_carrier = CASE WHEN ? = 1 THEN excluded.current_voluntary_carrier ELSE companies.current_voluntary_carrier END,
+      major_medical_carrier     = CASE WHEN ? = 1 THEN excluded.major_medical_carrier     ELSE companies.major_medical_carrier     END,
+      is_hdhp                   = CASE WHEN ? = 1 THEN excluded.is_hdhp                   ELSE companies.is_hdhp                   END,
+      estimated_w2_count        = CASE WHEN ? = 1 THEN excluded.estimated_w2_count        ELSE companies.estimated_w2_count        END,
+      confidence_score          = CASE WHEN ? = 1 THEN excluded.confidence_score          ELSE companies.confidence_score          END,
+      status                    = CASE WHEN ? = 1 THEN excluded.status                    ELSE companies.status                    END,
+      -- Spatial: a full coordinate pair re-derives the hash, a payload with no
+      -- coordinates leaves it alone, and a HALF-supplied pair clears it rather
+      -- than leaving a hash that no longer describes where the account is.
+      geohash = CASE
+        WHEN excluded.lat IS NOT NULL AND excluded.long IS NOT NULL THEN excluded.geohash
+        WHEN excluded.lat IS NULL     AND excluded.long IS NULL     THEN companies.geohash
+        ELSE NULL
+      END
   `).bind(
     company.company_id,
     company.d365_lead_id ?? null,
@@ -160,7 +259,25 @@ export async function upsertCompany(db, company, userEmail) {
     company.forecast_ap ?? null,
     company.forecast_confidence ?? null,
     company.is_d365_synced ?? 0,
-    userEmail
+    company.company_phone ?? null,
+    company.decision_maker ?? null,
+    company.notes ?? null,
+    // V2 Agency OS columns.
+    company.current_voluntary_carrier ?? 'None',
+    company.major_medical_carrier ?? null,
+    company.is_hdhp ?? 0,
+    company.estimated_w2_count ?? 0,
+    company.confidence_score ?? 30,
+    company.geohash ?? null,
+    company.status ?? 'ACTIVE',
+    userEmail,
+    // Presence flags consumed by the CASE expressions above, in order.
+    company.__has_current_voluntary_carrier ?? 0,
+    company.__has_major_medical_carrier ?? 0,
+    company.__has_is_hdhp ?? 0,
+    company.__has_estimated_w2_count ?? 0,
+    company.__has_confidence_score ?? 0,
+    company.__has_status ?? 0
   ).run();
 
   return company.company_id;

@@ -48,6 +48,34 @@ CREATE TABLE IF NOT EXISTS companies (
     disqualified_reason TEXT,
     forecast_ap REAL,
     forecast_confidence INTEGER,
+    company_phone TEXT,
+    decision_maker TEXT,
+    notes TEXT,
+    current_voluntary_carrier TEXT,
+    major_medical_carrier TEXT,
+    is_hdhp INTEGER NOT NULL DEFAULT 0 CHECK (is_hdhp IN (0, 1)),
+    estimated_w2_count INTEGER CHECK (
+        estimated_w2_count IS NULL
+        OR (
+            typeof(estimated_w2_count) = 'integer'
+            AND estimated_w2_count >= 0
+        )
+    ),
+    confidence_score INTEGER NOT NULL DEFAULT 30
+        CHECK (confidence_score BETWEEN 0 AND 100),
+    geohash TEXT CHECK (
+        geohash IS NULL
+        OR (
+            length(geohash) = 7
+            AND geohash NOT GLOB '*[^0123456789bcdefghjkmnpqrstuvwxyz]*'
+        )
+    ),
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    verification_status TEXT NOT NULL DEFAULT 'UNVERIFIED' CHECK (
+        verification_status IN (
+            'UNVERIFIED', 'PHONE_VERIFIED', 'FIELD_VERIFIED', 'DISQUALIFIED'
+        )
+    ),
     created_at TEXT DEFAULT (datetime('now')),
     agent_email TEXT NOT NULL DEFAULT 'sean_deardorff@us.aflac.com',
     PRIMARY KEY (company_id, agent_email)
@@ -125,6 +153,24 @@ CREATE INDEX IF NOT EXISTS idx_companies_pipeline ON companies(pipeline_stage, s
 -- Pipeline CRM: next-action task list queries.
 CREATE INDEX IF NOT EXISTS idx_activity_next_action ON activity_logs(company_id, next_action_date);
 
+-- Tenant-scoped six-character Geohash prefix lookup for radar scans. The
+-- partial predicate mirrors the terminal-status exclusion in the radar
+-- query so the planner can use this expression index on the hot path.
+CREATE INDEX IF NOT EXISTS idx_companies_agent_geohash6
+    ON companies (
+        agent_email,
+        SUBSTR(geohash, 1, 6)
+    )
+    WHERE status NOT IN ('DISQUALIFIED', 'DO_NOT_CONTACT');
+
+-- Confidence triage and high-confidence field-canvass filtering.
+CREATE INDEX IF NOT EXISTS idx_companies_agent_confidence
+    ON companies (
+        agent_email,
+        confidence_score,
+        status
+    );
+
 -- ---------------------------------------------------------------------
 -- 5. PIPELINE EVENTS — audit log for stage transitions.
 --    Every time pipeline_stage changes, a row lands here so the agent
@@ -144,6 +190,50 @@ CREATE TABLE IF NOT EXISTS pipeline_events (
     FOREIGN KEY (company_id, agent_email) REFERENCES companies(company_id, agent_email)
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_company ON pipeline_events(company_id, changed_at);
+
+-- ---------------------------------------------------------------------
+-- 5b. ACTIVITIES — append-only voice event log (migrations/0005_voice_orchestration.sql)
+--     Distinct from activity_logs: `company_id` is nullable, because the
+--     voice debrief endpoint deliberately accepts a recording with no account
+--     attached. activity_logs stays the D365-export source of truth.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS activities (
+    activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id TEXT,
+    agent_email TEXT NOT NULL DEFAULT 'sean_deardorff@us.aflac.com',
+    activity_type TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('PHONE', 'FIELD')),
+    notes TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    raw_transcript TEXT NOT NULL,
+    extracted_json TEXT NOT NULL,
+    next_action TEXT NOT NULL DEFAULT 'NONE',
+    next_action_date TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (company_id, agent_email) REFERENCES companies(company_id, agent_email)
+);
+
+CREATE INDEX IF NOT EXISTS idx_activities_agent_created
+    ON activities(agent_email, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_activities_company_created
+    ON activities(company_id, created_at);
+
+-- ---------------------------------------------------------------------
+-- 5c. D365_DAILY_AGGREGATES — local compliance counter buffer, keyed to the
+--     Springfield business date so an evening phone block lands on the day
+--     the agent actually worked.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS d365_daily_aggregates (
+    business_date TEXT NOT NULL,
+    agent_email TEXT NOT NULL DEFAULT 'sean_deardorff@us.aflac.com',
+    phone_dials INTEGER NOT NULL DEFAULT 0 CHECK (phone_dials >= 0),
+    dm_contacts INTEGER NOT NULL DEFAULT 0 CHECK (dm_contacts >= 0),
+    walk_ins INTEGER NOT NULL DEFAULT 0 CHECK (walk_ins >= 0),
+    appointments_set INTEGER NOT NULL DEFAULT 0 CHECK (appointments_set >= 0),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (business_date, agent_email)
+);
 
 -- ---------------------------------------------------------------------
 -- 6. NON-DESTRUCTIVE MIGRATIONS — add new columns to existing production DB.
@@ -169,4 +259,9 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_events_company ON pipeline_events(compan
 --   CREATE INDEX IF NOT EXISTS idx_companies_pipeline ON companies(pipeline_stage, snoozed_until);
 --   CREATE INDEX IF NOT EXISTS idx_activity_next_action ON activity_logs(company_id, next_action_date);
 --   CREATE INDEX IF NOT EXISTS idx_pipeline_events_company ON pipeline_events(company_id, changed_at);
+--
+-- Phase 3 (field intelligence, migrations/0004_company_intel.sql):
+--   ALTER TABLE companies ADD COLUMN company_phone TEXT;
+--   ALTER TABLE companies ADD COLUMN decision_maker TEXT;
+--   ALTER TABLE companies ADD COLUMN notes TEXT;
 

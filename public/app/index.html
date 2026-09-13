@@ -25,7 +25,48 @@
   <link rel="apple-touch-icon" href="/icon.jpg">
 </head>
 <body>
-  <div class="app-shell">
+  <!-- ============================================================
+       AGENCY OS SHELL — the dual-mode field/phone workspace.
+
+       The mode buttons carry data-agency-mode and are bound by
+       modules/navigation.js, which also owns the theme toggle
+       (data-agency-theme-toggle) and the escape hatch back to the
+       legacy console (data-agency-legacy).
+       ============================================================ -->
+  <header class="agency-topbar" id="agencyTopbar">
+    <div class="agency-topbar-brand">
+      <strong>Agency OS</strong>
+    </div>
+
+    <nav class="agency-mode-switch" role="tablist" aria-label="Sales mode">
+      <button type="button" class="agency-mode-btn" role="tab" aria-selected="false"
+              data-agency-mode="PHONE" id="modePhone">📞 Phone</button>
+      <button type="button" class="agency-mode-btn active" role="tab" aria-selected="true"
+              data-agency-mode="FIELD" id="modeField">📍 Field</button>
+      <button type="button" class="agency-mode-btn" role="tab" aria-selected="false"
+              data-agency-mode="TRIAGE" id="modeTriage">📋 Triage</button>
+    </nav>
+
+    <div class="agency-topbar-actions">
+      <button type="button" class="agency-icon-btn" id="sunGlareToggle"
+              data-agency-theme-toggle aria-pressed="false"
+              aria-label="Toggle sun-glare high-contrast theme"
+              title="Sun glare mode">☀️</button>
+      <button type="button" class="agency-icon-btn" id="legacyShellToggle"
+              data-agency-legacy aria-label="Open the console workspace"
+              title="Console (pipeline, route planner, D365)">🗂️</button>
+    </div>
+  </header>
+
+  <!-- Sprint 4 mounts the dialer / canvass / triage views here. -->
+  <div id="view-container" class="agency-views" role="region" aria-label="Agency OS workspace"></div>
+
+  <!-- ============================================================
+       LEGACY CONSOLE — retained and reachable from the top bar. Its
+       scripts keep running; the top bar only controls visibility via
+       body[data-agency-shell] so nothing here has to be removed.
+       ============================================================ -->
+  <div class="app-shell" id="legacy-shell">
 
     <!-- ============================================================
          DESKTOP SIDEBAR (>=1024px). Hidden on mobile, where the field
@@ -165,6 +206,17 @@
             </button>
 
             <div class="dossier" id="dossierPanel" hidden aria-live="polite">
+              <!-- What the agent knows before he walks in: who to ask for, a
+                   one-tap dial, and the strategy note from his own field list. -->
+              <div class="account-intel" id="accountIntel" hidden>
+                <div class="callout-header">🎯 <strong>Account Intel</strong></div>
+                <p class="intel-row" id="intelDecisionMaker" hidden></p>
+                <a class="intel-call" id="intelPhone" hidden href="#">📞 <span id="intelPhoneText"></span></a>
+                <details class="intel-notes" id="intelNotesWrap" hidden>
+                  <summary>Strategy &amp; history</summary>
+                  <p class="intel-notes-body" id="intelNotes"></p>
+                </details>
+              </div>
               <div class="next-action-callout" id="nextActionCallout" hidden>
                 <div class="callout-header">⚡ <strong>AI Next Action</strong></div>
                 <p class="callout-body" id="nextActionText"></p>

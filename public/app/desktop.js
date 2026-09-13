@@ -1288,9 +1288,12 @@ async function uploadInChunks(companies, chunkSize) {
   fill.style.width = '0%';
 
   let totalImported = 0;
+  let totalCreated = 0;
+  let totalMerged = 0;
   let totalContacts = 0;
   let totalGeocoded = 0;
   const allSkipped = [];
+  const allAmbiguous = [];
   const totalChunks = Math.ceil(companies.length / chunkSize);
 
   for (let i = 0; i < companies.length; i += chunkSize) {
@@ -1303,9 +1306,21 @@ async function uploadInChunks(companies, chunkSize) {
     try {
       const result = await apiPost('/api/companies/import', { companies: chunk });
       totalImported += result.imported || 0;
+      totalCreated += result.created || 0;
+      totalMerged += result.merged || 0;
       totalContacts += result.contacts || 0;
       totalGeocoded += result.geocoded || 0;
       if (result.skipped?.length) allSkipped.push(...result.skipped);
+      // A name matching two existing accounts is not an error and not a
+      // success — it needs the agent to pick. Reporting it is the whole point:
+      // the 2026-09-01 duplicate incident was invisible because the import
+      // answered "imported: 50" no matter what it had actually done.
+      if (result.ambiguous?.length) allAmbiguous.push(...result.ambiguous);
+      if (result.not_processed?.length) {
+        allSkipped.push(...result.not_processed.map((company_name) => ({
+          company_name, reason: 'Batch too large — not processed'
+        })));
+      }
     } catch (err) {
       showToast(`Batch ${chunkIndex} failed: ${err.message}`, 'error');
     }
@@ -1316,10 +1331,14 @@ async function uploadInChunks(companies, chunkSize) {
 
   // Show summary stats
   const lines = [
-    `✅ <strong>${totalImported}</strong> companies imported`,
+    `✅ <strong>${totalCreated}</strong> new companies created`,
+    `🔗 <strong>${totalMerged}</strong> existing accounts updated`,
     `👤 <strong>${totalContacts}</strong> contacts attached`,
     `📍 <strong>${totalGeocoded}</strong> addresses geocoded`
   ];
+  if (allAmbiguous.length > 0) {
+    lines.push(`❓ <strong>${allAmbiguous.length}</strong> need a street to place: ${allAmbiguous.map((a) => a.company_name).join(', ')}`);
+  }
   if (allSkipped.length > 0) {
     lines.push(`⚠️ <strong>${allSkipped.length}</strong> skipped: ${allSkipped.map((s) => s.company_name).join(', ')}`);
   }

@@ -138,6 +138,22 @@ function fallbackReport(date, metrics, activities) {
 }
 
 /**
+ * A real calendar day, not merely the right shape.
+ *
+ * Date.parse rolls 2026-02-31 over to March 3 rather than rejecting it, so a
+ * format check alone would accept a day that does not exist and then report
+ * another day's counters under its heading.
+ */
+function isValidBusinessDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return false;
+
+  return parsed.toISOString().slice(0, 10) === value;
+}
+
+/**
  *   ?date=YYYY-MM-DD  a specific Springfield business day (default: today)
  */
 eod.get('/', async (c) => {
@@ -145,7 +161,7 @@ eod.get('/', async (c) => {
   const url = new URL(c.req.url);
   const date = url.searchParams.get('date') || businessDate();
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+  if (!isValidBusinessDate(date)) {
     return c.json({ error: 'Invalid date format (expected YYYY-MM-DD)' }, 400);
   }
 
@@ -231,6 +247,142 @@ eod.get('/', async (c) => {
     report
   }, 200, { 'Cache-Control': 'no-store' });
 });
+
+// ---------------------------------------------------------------------
+// GET /api/eod-aggregates — the D365 compliance block
+// ---------------------------------------------------------------------
+
+/**
+ * The counters the agent pastes into Dynamics 365 at close of day.
+ *
+ * TWO SOURCES, ON PURPOSE
+ * `d365_daily_aggregates` counts what Agency OS wrote — voice debriefs and
+ * quick drops. `activity_logs` counts what the legacy field shell wrote. The
+ * two are disjoint by construction: the voice and quick-drop paths never touch
+ * activity_logs, and the legacy /api/transcribe-and-log path never touches the
+ * counters. So summing them cannot double-count a touch, and reading only one
+ * would silently drop half a day's numbers — an agent who logs three doors in
+ * the legacy shell and forty dials in the dialer must see forty-three.
+ *
+ * BOTH READS DEGRADE TO ZERO
+ * On a deployment where migrations/0005 has not been applied,
+ * d365_daily_aggregates does not exist. An error page is the wrong answer there:
+ * the legacy half of the report is still true, so it is returned with the
+ * missing source named in `sources.degraded`.
+ */
+
+const EMPTY_COUNTERS = { walk_ins: 0, dm_contacts: 0, phone_dials: 0, appointments_set: 0 };
+
+/** Counters are SQLite SUMs; a NULL from an empty day is not a number. */
+function toCount(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function normalizeCounters(row) {
+  return {
+    walk_ins: toCount(row?.walk_ins),
+    dm_contacts: toCount(row?.dm_contacts),
+    phone_dials: toCount(row?.phone_dials),
+    appointments_set: toCount(row?.appointments_set)
+  };
+}
+
+/** Voice debriefs + quick drops. Keyed to the Springfield business date. */
+async function readAggregateCounters(env, userEmail, date) {
+  try {
+    const row = await env.DB.prepare(`
+      SELECT walk_ins, dm_contacts, phone_dials, appointments_set
+      FROM d365_daily_aggregates
+      WHERE business_date = ? AND agent_email = ?
+      LIMIT 1
+    `).bind(date, userEmail).first();
+
+    return { ...normalizeCounters(row), degraded: false };
+  } catch (err) {
+    console.error('EOD aggregate counters unavailable (treating as zero):', err);
+    return { ...EMPTY_COUNTERS, degraded: true };
+  }
+}
+
+/**
+ * The legacy shell's touches, derived with the same definitions computeMetrics()
+ * uses for the narrative debrief so the two reports can never disagree:
+ * a door is in-person, a DM contact is a DM contact, and a dial is anything
+ * that was not in person.
+ */
+async function readLegacyCounters(env, userEmail, date) {
+  const { start, end } = businessDayRangeUtc(date);
+
+  try {
+    const row = await env.DB.prepare(`
+      SELECT
+        SUM(CASE WHEN is_in_person THEN 1 ELSE 0 END) AS walk_ins,
+        SUM(CASE WHEN is_dm_contact THEN 1 ELSE 0 END) AS dm_contacts,
+        SUM(CASE WHEN is_in_person THEN 0 ELSE 1 END) AS phone_dials,
+        SUM(CASE WHEN presentation_date IS NOT NULL OR disposition = 'Presentation Scheduled'
+                 THEN 1 ELSE 0 END) AS appointments_set
+      FROM activity_logs
+      WHERE timestamp >= ? AND timestamp < ? AND agent_email = ?
+    `).bind(start, end, userEmail).first();
+
+    return { ...normalizeCounters(row), degraded: false };
+  } catch (err) {
+    console.error('EOD legacy counters unavailable (treating as zero):', err);
+    return { ...EMPTY_COUNTERS, degraded: true };
+  }
+}
+
+/**
+ *   ?date=YYYY-MM-DD  a specific Springfield business day (default: today)
+ */
+export async function handleEodAggregates(c) {
+  const userEmail = c.get('userEmail');
+  if (!userEmail) return c.json({ error: 'Unauthorized' }, 401);
+
+  const url = new URL(c.req.url);
+  const date = url.searchParams.get('date') || businessDate();
+
+  if (!isValidBusinessDate(date)) {
+    return c.json({ error: 'Invalid date format (expected YYYY-MM-DD)' }, 400);
+  }
+
+  const agency = await readAggregateCounters(c.env, userEmail, date);
+  const legacy = await readLegacyCounters(c.env, userEmail, date);
+
+  const degraded = [
+    agency.degraded ? 'd365_daily_aggregates' : null,
+    legacy.degraded ? 'activity_logs' : null
+  ].filter(Boolean);
+
+  return c.json({
+    success: true,
+    date,
+    walk_ins: agency.walk_ins + legacy.walk_ins,
+    dm_contacts: agency.dm_contacts + legacy.dm_contacts,
+    phone_dials: agency.phone_dials + legacy.phone_dials,
+    appointments_set: agency.appointments_set + legacy.appointments_set,
+    // The merge is shown, not implied: when a total looks wrong the first
+    // question is always "which half is missing?".
+    sources: {
+      voice_and_quick_drops: {
+        walk_ins: agency.walk_ins,
+        dm_contacts: agency.dm_contacts,
+        phone_dials: agency.phone_dials,
+        appointments_set: agency.appointments_set
+      },
+      legacy_shell: {
+        walk_ins: legacy.walk_ins,
+        dm_contacts: legacy.dm_contacts,
+        phone_dials: legacy.phone_dials,
+        appointments_set: legacy.appointments_set
+      },
+      degraded
+    }
+  }, 200, { 'Cache-Control': 'no-store' });
+}
+
+eod.get('/aggregates', handleEodAggregates);
 
 export default eod;
 export { computeMetrics, fallbackReport };

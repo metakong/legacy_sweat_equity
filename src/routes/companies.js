@@ -21,6 +21,7 @@ import {
   upsertCompany,
   upsertContact
 } from '../lib/db.js';
+import { CompanyMatcher } from '../lib/match.js';
 import { geocodeAddress, classifyIndustry } from '../lib/ai.js';
 import { businessDate, businessDayRangeUtc } from '../lib/time.js';
 
@@ -123,6 +124,10 @@ companies.get('/', async (c) => {
     SELECT co.company_id, co.company_name, co.street_1, co.street_2, co.city, co.state,
            co.zip_code, co.lat, co.long, co.lead_source, co.rating, co.employees,
            co.industry, co.d365_lead_id, co.is_d365_synced, co.renewal_date, co.created_at,
+           -- The field intelligence the agent actually walks in with. Without
+           -- these three the import writes a decision maker and a strategy the
+           -- UI can never show, which is the same as not storing them at all.
+           co.decision_maker, co.company_phone, co.notes,
            (SELECT COUNT(*) FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email) AS touch_count,
            (SELECT MAX(a.timestamp) FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email) AS last_touched,
            (SELECT a.disposition FROM activity_logs a WHERE a.company_id = co.company_id AND a.agent_email = co.agent_email ORDER BY a.timestamp DESC LIMIT 1) AS latest_disposition,
@@ -163,6 +168,22 @@ companies.post('/', async (c) => {
     return c.json({ error: 'Malformed JSON body' }, 400);
   }
 
+  // Resolve identity before writing. Scouting the same storefront twice from
+  // the field — once from the map, once by typing the name — used to mint two
+  // accounts, because this door had no duplicate check of any kind.
+  const candidates = await c.env.DB.prepare(
+    `SELECT company_id, company_name, street_1, zip_code, account_number, d365_lead_id
+     FROM companies WHERE agent_email = ?`
+  ).bind(userEmail).all();
+  const match = new CompanyMatcher(candidates?.results || []).resolve(body);
+  if (match?.ambiguous) {
+    return c.json({
+      error: 'That name matches more than one existing account. Add a street address to disambiguate.',
+      candidates: match.candidates
+    }, 409);
+  }
+  if (match) body.company_id = match.company_id;
+
   // Auto-geocode if address is present and coordinates are missing
   if ((!body?.lat || !body?.long) && body?.street_1) {
     const fullAddress = [body.street_1, body.city || 'Springfield', body.state || 'MO', body.zip_code]
@@ -194,7 +215,12 @@ companies.post('/', async (c) => {
     if (contact) contactIds.push(await upsertContact(c.env.DB, contact, userEmail));
   }
 
-  return c.json({ success: true, company_id: company.company_id, contact_ids: contactIds });
+  return c.json({
+    success: true,
+    company_id: company.company_id,
+    merged: Boolean(match),
+    contact_ids: contactIds
+  });
 });
 
 /** GET /api/companies/:id — account detail with contacts and full timeline. */
@@ -230,7 +256,23 @@ companies.get('/:id', async (c) => {
 });
 
 /**
- * Shared import handler for batched company + contact ingestion with auto-geocoding.
+ * Shared import handler for batched company + contact ingestion.
+ *
+ * IDENTITY FIRST, THEN ENRICHMENT.
+ *
+ * The 2026-09-01 incident: this handler used to look for an existing row only
+ * when the payload carried BOTH a company_name and a street_1 —
+ *
+ *     else if (raw.company_name && raw.street_1) { ...lookup... }
+ *
+ * A notes-only enrichment pass has no street, so the lookup never ran, every
+ * record fell through to a fresh crypto.randomUUID(), and ON CONFLICT could
+ * not fire on an id that had never existed. 50 of 50 records duplicated.
+ *
+ * Identity is now resolved by CompanyMatcher (src/lib/match.js) over several
+ * tiers of evidence, and a payload that matches nothing is the ONLY thing that
+ * creates a row. The matcher is also updated as rows are written, so two
+ * entries naming the same business inside one batch merge instead of racing.
  */
 export async function handleImport(c) {
   const userEmail = c.get('userEmail'); if (!userEmail) return c.json({error: 'Unauthorized'}, 401);
@@ -241,46 +283,63 @@ export async function handleImport(c) {
     return c.json({ error: 'Malformed JSON body' }, 400);
   }
 
-  const rawCompanies = Array.isArray(body?.companies) ? body.companies.slice(0, 50) : [];
-  if (rawCompanies.length === 0) {
+  const allCompanies = Array.isArray(body?.companies) ? body.companies : [];
+  if (allCompanies.length === 0) {
     return c.json({ error: 'No companies to import' }, 400);
   }
 
-  // --- PRE-FLIGHT DEDUPLICATION ---
-  const existing = await c.env.DB.prepare('SELECT company_id, company_name, street_1, account_number FROM companies WHERE agent_email = ?').bind(userEmail).all();
-  const normalizeKey = (n, s) => (String(n || '') + '|' + String(s || '')).toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
-  
-  const exactMap = new Map();
-  const fuzzyMap = new Map();
-  
-  if (existing.results) {
-    for (const row of existing.results) {
-      if (row.account_number) exactMap.set(row.account_number, row.company_id);
-      if (row.company_name && row.street_1) {
-        fuzzyMap.set(normalizeKey(row.company_name, row.street_1), row.company_id);
-      }
-    }
-  }
+  // Bounded because each net-new row costs a geocode plus an AI classification
+  // subrequest. The overflow is REPORTED, never dropped in silence: the old
+  // `.slice(0, 50)` sent 63 targets, imported 50, answered `imported: 50` with
+  // no error, and 12 real prospects were never seen again.
+  const rawCompanies = allCompanies.slice(0, LIMITS.importBatch);
+  const notProcessed = allCompanies.slice(LIMITS.importBatch)
+    .map((r) => r?.company_name || '(unnamed)');
 
-  let imported = 0;
+  // --- IDENTITY RESOLUTION INDEX ---
+  // lat/long/industry come back too so an already-geocoded, already-classified
+  // account does not pay for a second geocode and a second model call on every
+  // re-import.
+  const existing = await c.env.DB.prepare(
+    `SELECT company_id, company_name, street_1, zip_code, account_number,
+            d365_lead_id, lat, long, industry
+     FROM companies WHERE agent_email = ?`
+  ).bind(userEmail).all();
+
+  const existingRows = existing?.results || [];
+  const matcher = new CompanyMatcher(existingRows);
+  const byId = new Map(existingRows.map((row) => [row.company_id, row]));
+
+  let created = 0;
+  let merged = 0;
   let geocoded = 0;
   let contactCount = 0;
   const skipped = [];
+  const ambiguous = [];
 
   for (const raw of rawCompanies) {
     try {
-      // 1. DEDUPLICATION
-      if (raw.account_number && exactMap.has(raw.account_number)) {
-        raw.company_id = exactMap.get(raw.account_number);
-      } else if (raw.company_name && raw.street_1) {
-        const fuzzyKey = normalizeKey(raw.company_name, raw.street_1);
-        if (fuzzyMap.has(fuzzyKey)) {
-          raw.company_id = fuzzyMap.get(fuzzyKey);
-        }
+      // 1. IDENTITY
+      const match = matcher.resolve(raw);
+
+      if (match?.ambiguous) {
+        // Several real accounts carry this name and the payload gives nothing
+        // to separate them. Creating a third row would be wrong and picking
+        // one at random would be worse, so hand the decision back.
+        ambiguous.push({
+          company_name: raw?.company_name || '(unknown)',
+          reason: 'Name matches more than one existing account; add a street or account_number',
+          candidates: match.candidates
+        });
+        continue;
       }
 
-      // Auto-geocode if address is present and coordinates are missing
-      if ((!raw?.lat || !raw?.long) && raw?.street_1) {
+      const existingRow = match ? byId.get(match.company_id) : null;
+      if (match) raw.company_id = match.company_id;
+
+      // 2. GEOCODE — only when we still lack coordinates for this account.
+      const needsGeocode = !existingRow?.lat || !existingRow?.long;
+      if (needsGeocode && (!raw?.lat || !raw?.long) && raw?.street_1) {
         const fullAddress = [raw.street_1, raw.city || 'Springfield', raw.state || 'MO', raw.zip_code]
           .filter(Boolean)
           .join(', ');
@@ -292,27 +351,41 @@ export async function handleImport(c) {
         }
       }
 
-      // AI Industry Classification — only run when D365 did not supply one.
-      // Never overwrite a valid SIC/Industry string from a D365 export with
-      // an AI guess; that destroys curated CRM data on every re-import.
-      if (raw?.company_name && !raw?.industry) {
+      // 3. INDUSTRY — only when D365 did not supply one and we do not already
+      // hold one. Never overwrite a curated SIC/Industry string with an AI
+      // guess; that destroys CRM data on every re-import.
+      if (raw?.company_name && !raw?.industry && !existingRow?.industry) {
         try {
-          const aiIndustry = await classifyIndustry(raw.company_name, c.env);
-          if (aiIndustry) {
-            raw.industry = aiIndustry;
-          } else {
-            raw.industry = 'Other Commercial';
-          }
+          raw.industry = (await classifyIndustry(raw.company_name, c.env)) || 'Other Commercial';
         } catch {
           raw.industry = 'Other Commercial';
         }
       }
 
+      // 4. WRITE
       const company = normalizeCompany(raw);
       await upsertCompany(c.env.DB, company, userEmail);
-      imported += 1;
+      if (match) merged += 1; else created += 1;
 
-      // Insert nested contacts
+      // Keep the index live so a later entry in this same batch resolves to
+      // the row we just wrote instead of creating its own.
+      const writtenRow = {
+        company_id: company.company_id,
+        company_name: company.company_name,
+        street_1: company.street_1 ?? existingRow?.street_1 ?? null,
+        zip_code: company.zip_code ?? existingRow?.zip_code ?? null,
+        account_number: company.account_number ?? existingRow?.account_number ?? null,
+        d365_lead_id: company.d365_lead_id ?? existingRow?.d365_lead_id ?? null,
+        lat: existingRow?.lat ?? company.lat ?? null,
+        long: existingRow?.long ?? company.long ?? null,
+        industry: existingRow?.industry ?? company.industry ?? null
+      };
+      matcher.add(writtenRow);
+      byId.set(company.company_id, writtenRow);
+
+      // 5. CONTACTS — attached to the RESOLVED account. Before the fix these
+      // hung off the duplicate that had just been minted, which is how 45
+      // decision makers ended up on rows the agent never sees.
       const rawContacts = Array.isArray(raw?.contacts) ? raw.contacts.slice(0, 20) : [];
       for (const rawContact of rawContacts) {
         const contact = normalizeContact(rawContact, company.company_id);
@@ -322,19 +395,29 @@ export async function handleImport(c) {
         }
       }
     } catch (err) {
+      // A swallowed error is how the last data-integrity bug stayed invisible:
+      // the response said success either way. The real message goes into the
+      // payload (single-tenant app behind Cloudflare Access) and to the log, so
+      // a schema drift or a bad row is diagnosable from the response alone.
+      if (!(err instanceof ValidationError)) console.error('import row failed', err);
       skipped.push({
         company_name: raw?.company_name || '(unknown)',
-        reason: err instanceof ValidationError ? err.message : 'Unexpected error'
+        reason: err instanceof ValidationError ? err.message : `Unexpected error: ${err?.message || err}`
       });
     }
   }
 
   return c.json({
-    success: true,
-    imported,
+    success: skipped.length === 0,
+    received: allCompanies.length,
+    imported: created + merged,
+    created,
+    merged,
     contacts: contactCount,
     geocoded,
-    skipped
+    skipped,
+    ambiguous,
+    not_processed: notProcessed
   });
 }
 

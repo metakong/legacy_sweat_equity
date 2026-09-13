@@ -12,7 +12,8 @@
  * Locally they come from the shell env via dev-server.js.
  */
 
-import { parseJsonLoose } from './validate.js';
+import { parseJsonLoose, asIsoDate } from './validate.js';
+import { businessDate } from './time.js';
 
 const GROQ_TRANSCRIBE_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
@@ -47,15 +48,78 @@ export class ProviderError extends Error {
 }
 
 /**
+ * Containers MediaRecorder actually produces, plus what a desktop mic app might
+ * upload. Groq sniffs the container, so the extension has to be right. Shared
+ * with the routes so the R2 object key and the upload filename agree.
+ */
+export const AUDIO_MIME_EXTENSIONS = {
+  'audio/webm': 'webm',
+  'audio/ogg': 'ogg',
+  'audio/mp4': 'm4a',
+  'audio/aac': 'aac',
+  'audio/mpeg': 'mp3',
+  'audio/wav': 'wav',
+  'audio/flac': 'flac'
+};
+
+/** File extension for a MIME type, defaulting to the mediaRecorder default. */
+export const audioExtensionFor = (mimeType) => {
+  const base = String(mimeType || '').split(';')[0].trim().toLowerCase();
+  return AUDIO_MIME_EXTENSIONS[base] || 'webm';
+};
+
+/**
+ * Normalize whatever the caller holds into a Blob that FormData can carry.
+ *
+ * Workers accept a Blob, an ArrayBuffer, a typed-array view, or an object with
+ * an arrayBuffer() method (the File that came out of a multipart form). An
+ * unhandled shape here would surface as an opaque 400 from Groq instead of a
+ * clear error from us.
+ */
+function toAudioBlob(input, mimeType = 'audio/webm') {
+  if (!input) return null;
+  if (typeof Blob !== 'undefined' && input instanceof Blob) return input;
+  if (input instanceof ArrayBuffer || ArrayBuffer.isView(input)) {
+    return new Blob([input], { type: mimeType });
+  }
+  if (typeof input.arrayBuffer === 'function' && typeof input.size === 'number') {
+    return new Blob([input], { type: input.type || mimeType });
+  }
+  return null;
+}
+
+/**
  * Speech to text via Groq Whisper.
  *
- * @param {object} env    Worker env bindings
- * @param {Blob}   audio  Mono Opus capture from MediaRecorder
- * @param {string} filename  Extension matters — Groq sniffs the container
- * @returns {Promise<string>} the raw transcript
+ * @param {Blob|ArrayBuffer|ArrayBufferView|File} audioBlobOrBuffer
+ * @param {object}   [options]
+ * @param {object}   [options.env]        Worker env bindings (GROQ_API_KEY)
+ * @param {string}   [options.filename]   Extension matters — Groq sniffs the container
+ * @param {string}   [options.mimeType]   Used to name a raw buffer upload
+ * @param {Function} [options.fetchImpl]  Injectable transport (tests only)
+ * @param {string}   [options.mockText]   Deterministic transcript (tests/staging)
+ * @returns {Promise<{success: true, text: string}>}
  */
-export async function transcribeAudio(env, audio, filename = 'journal.webm') {
-  if (!env.GROQ_API_KEY) throw new ProviderError('groq', 503, 'GROQ_API_KEY is not configured');
+export async function transcribeAudio(audioBlobOrBuffer, options = {}) {
+  const env = options.env || {};
+  const audio = toAudioBlob(audioBlobOrBuffer, options.mimeType);
+
+  if (!audio || audio.size === 0) {
+    throw new ProviderError('groq', 400, 'audio payload is empty or unsupported');
+  }
+
+  // Explicit injection rather than a silent fallback: a transcript is a CRM
+  // record, and a fabricated one must never be produced by accident.
+  if (typeof options.mockText === 'string') {
+    return { success: true, text: options.mockText.trim() };
+  }
+
+  if (!env.GROQ_API_KEY) {
+    throw new ProviderError('groq', 503, 'GROQ_API_KEY is not configured');
+  }
+
+  const doFetch = options.fetchImpl || fetch;
+  const filename = options.filename || `journal.${audioExtensionFor(audio.type)}`;
 
   const form = new FormData();
   form.append('file', audio, filename);
@@ -74,7 +138,7 @@ export async function transcribeAudio(env, audio, filename = 'journal.webm') {
     + 'accident, critical illness, hospital indemnity, short-term disability.'
   );
 
-  const res = await fetch(GROQ_TRANSCRIBE_URL, {
+  const res = await doFetch(GROQ_TRANSCRIBE_URL, {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
     body: form,
@@ -85,8 +149,13 @@ export async function transcribeAudio(env, audio, filename = 'journal.webm') {
     throw new ProviderError('groq', res.status, (await res.text().catch(() => '')).slice(0, 500));
   }
 
-  const data = await res.json();
-  return typeof data?.text === 'string' ? data.text.trim() : '';
+  const data = await res.json().catch(() => null);
+  const text = typeof data?.text === 'string' ? data.text.trim() : '';
+  if (!text) {
+    throw new ProviderError('groq', 502, 'transcription returned no text');
+  }
+
+  return { success: true, text };
 }
 
 /**
@@ -503,6 +572,297 @@ export async function geocodeAddress(env, addressStr) {
     console.warn('Geocoding fetch failed:', err.message);
     return null;
   }
+}
+
+// ---------------------------------------------------------------------
+// VOICE INTELLIGENCE (Sprint 2)
+// ---------------------------------------------------------------------
+
+/** Coarse outcome the voice pass may return. Distinct from DISPOSITIONS. */
+export const VOICE_DISPOSITIONS = [
+  'VM_NO_ANSWER',
+  'GATEKEEPER_BLOCK',
+  'GATEKEEPER_CLEARED',
+  'DM_TOUCH',
+  'PRESENTATION',
+  'CLOSED_WON',
+  'DISQUALIFIED'
+];
+
+export const VOICE_NEXT_ACTIONS = [
+  'PHONE_FOLLOWUP',
+  'FIELD_DROP',
+  'SEND_POP_DOCUMENT',
+  'NONE'
+];
+
+export const VOICE_VERIFICATION_STATUSES = [
+  'UNVERIFIED',
+  'PHONE_VERIFIED',
+  'FIELD_VERIFIED',
+  'DISQUALIFIED'
+];
+
+export const VOICE_COUNTER_KEYS = [
+  'phone_dials',
+  'dm_contacts',
+  'walk_ins',
+  'appointments_set'
+];
+
+/**
+ * The prompt is a hard contract: its output is written into a CRM and into a
+ * compliance counter, so the enums are restated verbatim and the model is told
+ * to prefer null over a guess. A hallucinated carrier or headcount is far more
+ * expensive than an empty column.
+ */
+const VOICE_SYSTEM_PROMPT = `You are the structured-intelligence pass for an independent Aflac worksite agent in Springfield, Missouri. You receive a transcript of ONE phone or field interaction and return one strict JSON object.
+
+Return ONLY a JSON object with exactly these keys:
+{
+  "disposition": one of ["VM_NO_ANSWER","GATEKEEPER_BLOCK","GATEKEEPER_CLEARED","DM_TOUCH","PRESENTATION","CLOSED_WON","DISQUALIFIED"],
+  "contact_made": boolean,
+  "decision_maker_name": string or null,
+  "decision_maker_title": string or null,
+  "current_voluntary_carrier": string or null,
+  "major_medical_carrier": string or null,
+  "is_hdhp": boolean or null,
+  "estimated_w2_count": integer or null,
+  "summary_notes": string (2-3 factual sentences, third person),
+  "next_action": one of ["PHONE_FOLLOWUP","FIELD_DROP","SEND_POP_DOCUMENT","NONE"],
+  "next_action_date": "YYYY-MM-DD" or null,
+  "confidence_score": integer 0-100,
+  "verification_status": one of ["UNVERIFIED","PHONE_VERIFIED","FIELD_VERIFIED","DISQUALIFIED"],
+  "d365_counters": { "phone_dials": integer, "dm_contacts": integer, "walk_ins": integer, "appointments_set": integer }
+}
+
+Rules:
+- Use ONLY the listed enum values. Never invent a disposition, a next action, or a verification status.
+- Emit null for anything not clearly stated. Never infer a headcount, a carrier, or a person's name.
+- "DM_TOUCH" means a decision maker was actually reached. "GATEKEEPER_BLOCK" means a gatekeeper refused. "GATEKEEPER_CLEARED" means you were passed through but no decision-maker conversation happened yet. "VM_NO_ANSWER" means voicemail or no answer.
+- verification_status is PHONE_VERIFIED only when a decision maker confirmed their own details on a call, FIELD_VERIFIED only when confirmed face to face, and DISQUALIFIED only when the business cannot buy.
+- confidence_score bands: 30-40 raw unverified import, 50-70 registry match, 80-100 decision maker confirmed on this contact.
+- d365_counters describe THIS interaction only: phone_dials 1 for a placed call, walk_ins 1 for a physical stop, dm_contacts 1 only if a decision maker was reached, appointments_set 1 only if a presentation was scheduled. Use 0 when unsure.
+- CRITICAL B2B COMPLIANCE: actively redact and ignore any mention of specific medical conditions, health data, or individual employee names other than the primary B2B decision maker. Replace any such instance with [REDACTED - PHI].
+- Never include commentary, markdown, or code fences. JSON only.`;
+
+/** Trimmed, length-capped text, or null when nothing usable was returned. */
+function asVoiceText(value, max) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, max) : null;
+}
+
+/** Strict boolean coercion — the model returns real booleans, not accents. */
+function asVoiceBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1' || value === 'true') return true;
+  if (value === 0 || value === '0' || value === 'false') return false;
+  return null;
+}
+
+/** Integer in range, or null. Rejects floats, NaN and numeric strings. */
+function asVoiceInteger(value, min, max) {
+  const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < min || n > max) return null;
+  return n;
+}
+
+/** Counter values are non-negative integers; absent means zero, never NaN. */
+function asVoiceCounter(value) {
+  const n = asVoiceInteger(value, 0, 10_000);
+  return n === null ? 0 : n;
+}
+
+/** Pinned but overridable, so a model retirement is a config change. */
+export const VOICE_MODEL_DEFAULT = 'anthropic/claude-3.5-sonnet';
+
+/**
+ * Coerce the model's JSON into the exact contract, or throw.
+ *
+ * Strict on the fields that drive a CRM write (disposition, counters,
+ * confidence, verification) and tolerant on the descriptive fields, where an
+ * absent value is legitimately "unknown" rather than a contract violation.
+ */
+function normalizeVoiceExtraction(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ProviderError('openrouter', 502, 'voice extraction was not a JSON object');
+  }
+
+  const disposition = VOICE_DISPOSITIONS.includes(raw.disposition) ? raw.disposition : null;
+  if (!disposition) {
+    throw new ProviderError(
+      'openrouter',
+      502,
+      `voice extraction returned an unknown disposition: ${String(raw.disposition).slice(0, 40)}`
+    );
+  }
+
+  const contactMade = asVoiceBoolean(raw.contact_made);
+  if (contactMade === null) {
+    throw new ProviderError('openrouter', 502, 'voice extraction omitted contact_made');
+  }
+
+  const summary = asVoiceText(raw.summary_notes, 8000);
+  if (!summary) {
+    throw new ProviderError('openrouter', 502, 'voice extraction omitted summary_notes');
+  }
+
+  const confidence = asVoiceInteger(raw.confidence_score, 0, 100);
+  if (confidence === null) {
+    throw new ProviderError('openrouter', 502, 'voice extraction returned an out-of-range confidence_score');
+  }
+
+  const nextAction = VOICE_NEXT_ACTIONS.includes(raw.next_action) ? raw.next_action : 'NONE';
+
+  // A disqualified business is disqualified in BOTH fields. Letting the model
+  // return DISQUALIFIED with UNVERIFIED would leave the account suppressed by
+  // one column and eligible in another.
+  const verification = disposition === 'DISQUALIFIED'
+    ? 'DISQUALIFIED'
+    : (VOICE_VERIFICATION_STATUSES.includes(raw.verification_status)
+      ? raw.verification_status
+      : 'UNVERIFIED');
+
+  const rawCounters = raw.d365_counters && typeof raw.d365_counters === 'object'
+    ? raw.d365_counters
+    : {};
+  const d365Counters = {};
+  for (const key of VOICE_COUNTER_KEYS) d365Counters[key] = asVoiceCounter(rawCounters[key]);
+
+  return {
+    disposition,
+    contact_made: contactMade,
+    decision_maker_name: asVoiceText(raw.decision_maker_name, 200),
+    decision_maker_title: asVoiceText(raw.decision_maker_title, 200),
+    current_voluntary_carrier: asVoiceText(raw.current_voluntary_carrier, 120),
+    major_medical_carrier: asVoiceText(raw.major_medical_carrier, 120),
+    is_hdhp: asVoiceBoolean(raw.is_hdhp),
+    estimated_w2_count: asVoiceInteger(raw.estimated_w2_count, 0, 5_000_000),
+    summary_notes: summary,
+    next_action: nextAction,
+    next_action_date: asIsoDate(raw.next_action_date),
+    confidence_score: confidence,
+    verification_status: verification,
+    d365_counters: d365Counters
+  };
+}
+
+/**
+ * Deterministic, conservative extraction for staging and for a deployment with
+ * no OpenRouter key.
+ *
+ * It records only what is objectively true — a call was placed, or a door was
+ * walked — and never claims a decision maker was reached, a carrier exists, or
+ * a headcount is known. The route reports `degraded` alongside it, so the saved
+ * record stays honest about where it came from.
+ */
+export function fallbackVoiceIntelligence(transcript, context = {}) {
+  const mode = context.mode === 'FIELD' ? 'FIELD' : 'PHONE';
+  const summary = asVoiceText(transcript, 8000)
+    || 'Voice note captured; no structured summary was produced.';
+
+  return {
+    disposition: mode === 'FIELD' ? 'GATEKEEPER_BLOCK' : 'VM_NO_ANSWER',
+    contact_made: false,
+    decision_maker_name: null,
+    decision_maker_title: null,
+    current_voluntary_carrier: null,
+    major_medical_carrier: null,
+    is_hdhp: null,
+    estimated_w2_count: null,
+    summary_notes: summary,
+    next_action: 'NONE',
+    next_action_date: null,
+    confidence_score: 30,
+    verification_status: 'UNVERIFIED',
+    d365_counters: {
+      phone_dials: mode === 'PHONE' ? 1 : 0,
+      dm_contacts: 0,
+      walk_ins: mode === 'FIELD' ? 1 : 0,
+      appointments_set: 0
+    }
+  };
+}
+
+/**
+ * Transcript -> strict structured intelligence via OpenRouter.
+ *
+ * @param {string} transcript
+ * @param {object} [context]  { mode: 'PHONE'|'FIELD', company_id, company_name }
+ * @param {object} [env]      Worker env bindings (OPENROUTER_API_KEY)
+ * @returns {Promise<object>} the normalized contract object
+ */
+export async function extractVoiceIntelligence(transcript, context = {}, env = {}) {
+  const text = typeof transcript === 'string' ? transcript.trim() : '';
+  if (!text) {
+    throw new ProviderError('openrouter', 400, 'a non-empty transcript is required');
+  }
+
+  // Explicit injection for tests and staging, checked before the key so an
+  // unconfigured environment can still be exercised end to end.
+  if (env.VOICE_INTELLIGENCE_MOCK) {
+    return normalizeVoiceExtraction(env.VOICE_INTELLIGENCE_MOCK);
+  }
+
+  // No key is a deployment state, not a crash: fall back to the conservative
+  // derivation and let the route report `degraded`.
+  if (!env.OPENROUTER_API_KEY) {
+    return fallbackVoiceIntelligence(text, context);
+  }
+
+  const mode = context.mode === 'FIELD' ? 'FIELD' : 'PHONE';
+  const userPrompt = [
+    `Today's date is ${businessDate()} (America/Chicago). Resolve every relative date against it and emit YYYY-MM-DD.`,
+    `Interaction mode: ${mode === 'FIELD' ? 'in person, at the business' : 'phone call'}`,
+    `Account: ${context.company_name || 'not specified'}`,
+    '',
+    'Transcript:',
+    text
+  ].join('\n');
+
+  const doFetch = env.fetchImpl || fetch;
+
+  const res = await doFetch(OPENROUTER_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      // OpenRouter attribution headers — optional, but they keep the request
+      // off the anonymous rate-limit bucket.
+      'HTTP-Referer': env.APP_URL || 'https://legacysweatequity.com',
+      'X-Title': 'Aflac Field Prospecting Assistant'
+    },
+    body: JSON.stringify({
+      model: env.OPENROUTER_MODEL || VOICE_MODEL_DEFAULT,
+      messages: [
+        { role: 'system', content: VOICE_SYSTEM_PROMPT },
+        { role: 'user', content: userPrompt }
+      ],
+      response_format: { type: 'json_object' },
+      // Extraction, not composition: the same transcript must produce the same
+      // CRM row on a retry.
+      temperature: 0,
+      max_tokens: 900
+    }),
+    signal: AbortSignal.timeout(45_000)
+  });
+
+  if (!res.ok) {
+    throw new ProviderError('openrouter', res.status, (await res.text().catch(() => '')).slice(0, 500));
+  }
+
+  const data = await res.json().catch(() => null);
+  const content = data?.choices?.[0]?.message?.content;
+  const parsed = content && typeof content === 'object'
+    ? content
+    : parseJsonLoose(content);
+
+  if (!parsed) {
+    throw new ProviderError('openrouter', 502, 'voice extraction returned unparseable JSON');
+  }
+
+  return normalizeVoiceExtraction(parsed);
 }
 
 

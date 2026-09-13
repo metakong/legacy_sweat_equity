@@ -38,3 +38,17 @@ seed-output.sql
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Wrangler/D1 scratch output (probe SQL, --json dumps, deploy logs). These are
+# throwaway diagnostics that run against production; they are never artifacts.
+.cf-*
+
+# Database backups + ad-hoc analysis dumps. Real prospect PII — never committed.
+backups/
+.tmp_analysis/
+
+# Field-intelligence source and its parsed output. Contains named decision
+# makers, direct phone numbers and account strategy for real businesses.
+leads.md
+parsed_leads.json
+parsed_enrichment.json

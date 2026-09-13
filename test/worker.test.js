@@ -1,6 +1,6 @@
 /**
  * Zero-dependency tests for the Worker's validation, CRM enum, and timezone
- * logic. Run with: npm test   (node --test, built in — no packages)
+ * logic. Run with: npm test   (node --test, built in â€” no packages)
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,6 +14,8 @@ import {
   asIsoDate,
   asMoney,
   asCount,
+  asLatitude,
+  asLongitude,
   deriveDisposition,
   parseJsonLoose,
   likePattern,
@@ -53,7 +55,7 @@ const DEL = String.fromCharCode(127);
 const C1 = String.fromCharCode(159);
 
 // ---------------------------------------------------------------------
-// cleanText — input normalization
+// cleanText â€” input normalization
 // ---------------------------------------------------------------------
 test('cleanText preserves characters that HTML-escaping used to corrupt', () => {
   // Regression: escape-on-write turned these into &#039; / &amp; in the CRM
@@ -134,6 +136,27 @@ test('asIsoDate accepts only YYYY-MM-DD', () => {
   assert.equal(asIsoDate('next Tuesday'), null);
 });
 
+test('coordinate coercers treat a missing value as missing, not as zero', () => {
+  // Regression: Number(null) and Number('') are both 0, which made an
+  // ungeocoded account a real 0,0 pin and let `?lat=&lng=` scan the Gulf of
+  // Guinea. A genuine numeric zero is still a real coordinate.
+  assert.equal(asLatitude(null), null);
+  assert.equal(asLatitude(undefined), null);
+  assert.equal(asLatitude(''), null);
+  assert.equal(asLatitude('   '), null);
+  assert.equal(asLatitude(0), 0);
+  assert.equal(asLatitude('0'), 0);
+  assert.equal(asLatitude('37.2089'), 37.2089);
+  assert.equal(asLatitude(91), null);
+  assert.equal(asLatitude('north'), null);
+
+  assert.equal(asLongitude(null), null);
+  assert.equal(asLongitude(''), null);
+  assert.equal(asLongitude(0), 0);
+  assert.equal(asLongitude(-93.2923), -93.2923);
+  assert.equal(asLongitude(-181), null);
+});
+
 test('asMoney parses spoken/typed currency and refuses nonsense', () => {
   assert.equal(asMoney('$4,800.00'), 4800);
   assert.equal(asMoney(12600), 12600);
@@ -165,13 +188,13 @@ test('deriveDisposition covers all eight binary combinations', () => {
     is_in_person: inPerson, is_initial: initial, is_dm_contact: dm
   });
 
-  // No decision maker reached — the channel decides the wording.
+  // No decision maker reached â€” the channel decides the wording.
   assert.equal(d(1, 1, 0), 'Gatekeeper Blocked');
   assert.equal(d(1, 0, 0), 'Gatekeeper Blocked');
   assert.equal(d(0, 1, 0), 'No Contact');
   assert.equal(d(0, 0, 0), 'No Contact');
 
-  // Decision maker reached — the touch type decides.
+  // Decision maker reached â€” the touch type decides.
   assert.equal(d(1, 1, 1), 'Information Left');
   assert.equal(d(0, 1, 1), 'Information Left');
   assert.equal(d(1, 0, 1), 'Follow-Up Scheduled');
@@ -242,7 +265,7 @@ test('business day range handles DST transition days', () => {
 });
 
 test('an evening activity falls inside that Springfield business day', () => {
-  // 19:00 CDT on the 21st is 00:00 UTC on the 22nd — the exact case a
+  // 19:00 CDT on the 21st is 00:00 UTC on the 22nd â€” the exact case a
   // UTC-based query drops.
   const { start, end } = businessDayRangeUtc('2026-07-21');
   const touch = '2026-07-22 00:00:00'; // stored by SQLite datetime('now')
@@ -315,7 +338,7 @@ test('normalizeCompany binds only primitives', () => {
   for (const [key, value] of Object.entries(company)) {
     assert.ok(
       value === null || typeof value === 'string' || typeof value === 'number',
-      `${key} is a ${typeof value} — D1 would throw on bind`
+      `${key} is a ${typeof value} â€” D1 would throw on bind`
     );
   }
   assert.equal(company.lat, null);
@@ -585,7 +608,7 @@ test('classifyIndustry handles OpenRouter mock response and network fallback', a
     const category = await classifyIndustry('Acme Rocket Fuel', { OPENROUTER_API_KEY: 'test-key' });
     assert.equal(category, 'Manufacturing');
 
-    // Mock OpenRouter failure — should gracefully fall back to rule-based category
+    // Mock OpenRouter failure â€” should gracefully fall back to rule-based category
     globalThis.fetch = async () => {
       throw new Error('Network timeout');
     };
@@ -723,7 +746,7 @@ test('findExistingContact and upsertContact deduplicate contacts on company_id a
 });
 
 // ---------------------------------------------------------------------
-// computeTelemetry — Data Management & Telemetry Aggregates
+// computeTelemetry â€” Data Management & Telemetry Aggregates
 // ---------------------------------------------------------------------
 test('computeTelemetry aggregates database metrics and derives sync health accurately', async () => {
   const mockDb = {
@@ -1433,117 +1456,199 @@ test('POST /api/companies/import successfully processes company_creation offline
   assert.equal(inserted[0].args[11], -93.2923);
 });
 
-test('GET /api/radar validates query parameters and handles Overpass responses', async () => {
-  // 1. Missing parameters -> 400
-  const badRes = await app.request('/api/radar', { method: 'GET' });
-  assert.equal(badRes.status, 400);
+// ---------------------------------------------------------------------
+// FIELD VIEW HELPERS â€” account intel rendering
+// ---------------------------------------------------------------------
 
-  // 2. Mock Overpass API response
-  const originalFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = async (url) => {
-      if (typeof url === 'string' && url.includes('overpass-api.de')) {
-        return new Response(JSON.stringify({
-          elements: [
-            {
-              type: 'node',
-              id: 101,
-              lat: 37.2091,
-              lon: -93.2915,
-              tags: {
-                name: 'Springfield Law Office',
-                office: 'lawyer',
-                'addr:housenumber': '101',
-                'addr:street': 'E Commercial St',
-                'addr:city': 'Springfield',
-                'addr:state': 'MO',
-                'addr:postcode': '65803'
-              }
-            },
-            {
-              type: 'node',
-              id: 102,
-              lat: 37.2085,
-              lon: -93.2930,
-              tags: { name: 'Ozark Coffee Roasters', shop: 'coffee' }
-            },
-            {
-              type: 'node',
-              id: 103,
-              lat: 37.2070,
-              lon: -93.2940,
-              tags: { amenity: 'bench' } // No name -> should be filtered out
-            }
-          ]
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return originalFetch(url);
-    };
+test('relativeDay reads D1 timestamps as UTC, not local', async () => {
+  const { relativeDay } = await import('../public/app/field.js');
 
-    const goodRes = await app.request('/api/radar?lat=37.2089&lng=-93.2923', { method: 'GET' });
-    assert.equal(goodRes.status, 200);
-    const data = await goodRes.json();
-    assert.ok(Array.isArray(data));
-    assert.equal(data.length, 2);
-    assert.equal(data[0].name, 'Springfield Law Office');
-    assert.equal(data[0].street_1, '101 E Commercial St');
-    assert.equal(data[0].city, 'Springfield');
-    assert.equal(data[0].state, 'MO');
-    assert.equal(data[0].zip_code, '65803');
-    assert.equal(data[0].lat, 37.2091);
-    assert.equal(data[0].lng, -93.2915);
-    assert.equal(data[1].name, 'Ozark Coffee Roasters');
-    assert.equal(data[1].street_1, '');
-  } finally {
-    globalThis.fetch = originalFetch;
+  // D1 stores 'YYYY-MM-DD HH:MM:SS' in UTC with no zone marker. Parsing that
+  // as local time shifts every evening Springfield touch by five hours and
+  // reports yesterday's visit as today's.
+  const now = Date.parse('2026-09-02T15:00:00Z');
+  assert.equal(relativeDay('2026-09-02 09:00:00', now), 'today');
+  assert.equal(relativeDay('2026-09-01 09:00:00', now), 'yesterday');
+  assert.equal(relativeDay('2026-08-30 09:00:00', now), '3 days ago');
+  assert.equal(relativeDay('2026-08-20 09:00:00', now), 'last week');
+  assert.equal(relativeDay('2026-07-01 09:00:00', now), '2 months ago');
+
+  // An explicit zone is respected rather than double-suffixed.
+  assert.equal(relativeDay('2026-09-02T09:00:00Z', now), 'today');
+
+  assert.equal(relativeDay(null), null);
+  assert.equal(relativeDay('not a date'), null);
+  assert.equal(relativeDay('2026-09-05 09:00:00', now), null, 'a future stamp is not a recency');
+});
+
+test('telHref builds a dialable number and never glues an extension on', async () => {
+  const { telHref } = await import('../public/app/field.js');
+
+  assert.equal(telHref('(417) 831-0048'), 'tel:4178310048');
+  assert.equal(telHref('417.869.7200'), 'tel:4178697200');
+  assert.equal(telHref('1-417-868-8002'), 'tel:+14178688002');
+
+  // Regression: the agent's list contains "417-868-8002 (Ext 1456)". Stripping
+  // non-digits dials 41786880021456 â€” a wrong number, tapped one-handed on a
+  // doorstep.
+  assert.equal(telHref('417-868-8002 (Ext 1456)'), 'tel:4178688002;ext=1456');
+  assert.equal(telHref('417-555-1212 x99'), 'tel:4175551212;ext=99');
+
+  // Two numbers in one field: dial the first, never a 20-digit concatenation.
+  assert.equal(telHref('417-831-0048 / 417-555-1212'), 'tel:4178310048');
+
+  // Anything that is not a phone number yields no href at all.
+  assert.equal(telHref('123'), null);
+  assert.equal(telHref('In-person drop-in.'), null);
+  assert.equal(telHref(''), null);
+  assert.equal(telHref(null), null);
+  assert.equal(telHref(undefined), null);
+});
+
+test('telHref output is always safe to place in an href', async () => {
+  const { telHref } = await import('../public/app/field.js');
+
+  // The value comes from the CRM, so it is never trusted verbatim. Whatever
+  // goes in, what comes out is tel: plus digits, an optional +, and ;ext=.
+  for (const hostile of [
+    'javascript:alert(1)',
+    '417-831-0048"><script>alert(1)</script>',
+    "417-831-0048' onclick='alert(1)",
+    '4178310048 <img src=x onerror=alert(1)>'
+  ]) {
+    const href = telHref(hostile);
+    if (href !== null) {
+      assert.match(href, /^tel:\+?\d+(;ext=\d+)?$/, `unsafe href from ${hostile}`);
+    }
   }
 });
 
-test('GET /api/radar gracefully fails over to secondary Overpass endpoint on primary failure', async () => {
-  const attemptedUrls = [];
-  const originalFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = async (url) => {
-      attemptedUrls.push(url);
-      if (typeof url === 'string' && url.startsWith('https://overpass-api.de')) {
-        throw new Error('Primary connection dropped');
+test('GET /api/radar rejects missing, empty and out-of-range coordinates', async () => {
+  // The DB binding is deliberately hostile: an invalid request must be refused
+  // before any read is attempted.
+  const env = {
+    DB: {
+      prepare() {
+        throw new Error('D1 must not be touched for an invalid radar request');
       }
-      if (typeof url === 'string' && url.startsWith('https://lz4.overpass-api.de')) {
-        return new Response(JSON.stringify({
-          elements: [
-            {
-              type: 'way',
-              id: 201,
-              center: { lat: 37.2100, lon: -93.2900 },
-              tags: { name: 'Ozark Precision Machining', industrial: 'factory' }
-            }
-          ]
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return new Response(JSON.stringify({ elements: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    };
+    }
+  };
 
-    const res = await app.request('/api/radar?lat=37.2089&lng=-93.2923', { method: 'GET' });
+  for (const query of [
+    '',
+    '?lat=37.2089',
+    '?lng=-93.2923',
+    '?lat=&lng=',
+    '?lat=abc&lng=abc',
+    '?lat=91&lng=-93.2923',
+    '?lat=37.2089&lng=-181'
+  ]) {
+    const res = await app.request(`/api/radar${query}`, { method: 'GET' }, env);
+    assert.equal(res.status, 400, `expected 400 for "${query}"`);
+  }
+});
+
+test('GET /api/radar reads the tenant-scoped geohash cells from D1 with no network call', async () => {
+  const calls = [];
+  const mockDb = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          return {
+            async all() {
+              calls.push({ sql, args });
+              return {
+                results: [
+                  {
+                    id: 'far', name: 'Far Account', address: '9 Elm St',
+                    city: 'Springfield', state: 'MO', zip: '65801',
+                    phone: null, website: null, latitude: 37.2405, longitude: -93.3210,
+                    geohash: '9ytetj0', pipeline_stage: 'PROSPECT', status: 'ACTIVE',
+                    current_voluntary_carrier: 'Aflac', major_medical_carrier: null,
+                    is_hdhp: 0, estimated_w2_count: 12, confidence_score: 85,
+                    updated_at: '2026-08-30 12:00:00'
+                  },
+                  {
+                    id: 'near', name: 'Near Account', address: '101 E Commercial St',
+                    city: 'Springfield', state: 'MO', zip: '65803',
+                    phone: '417-831-0048', website: null, latitude: 37.2091, longitude: -93.2915,
+                    geohash: '9ytetj1', pipeline_stage: 'ENGAGED', status: 'ACTIVE',
+                    current_voluntary_carrier: 'None', major_medical_carrier: 'CoxHealth',
+                    is_hdhp: 1, estimated_w2_count: 25, confidence_score: 85,
+                    updated_at: '2026-09-01 12:00:00'
+                  },
+                  {
+                    id: 'nowhere', name: 'Ungeocoded Account', address: null,
+                    city: null, state: null, zip: null, phone: null, website: null,
+                    latitude: null, longitude: null, geohash: null,
+                    pipeline_stage: 'PROSPECT', status: 'ACTIVE',
+                    current_voluntary_carrier: 'None', major_medical_carrier: null,
+                    is_hdhp: 0, estimated_w2_count: 0, confidence_score: 30,
+                    updated_at: null
+                  }
+                ]
+              };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  // The old implementation called the public Overpass API. Any outbound
+  // request from this route is a regression.
+  const originalFetch = globalThis.fetch;
+  const networkCalls = [];
+  globalThis.fetch = async (url) => {
+    networkCalls.push(url);
+    throw new Error('radar must not reach the network');
+  };
+
+  try {
+    const res = await app.request(
+      '/api/radar?lat=37.2089&lng=-93.2923&limit=500',
+      { method: 'GET' },
+      { DB: mockDb }
+    );
     assert.equal(res.status, 200);
-    const data = await res.json();
-    assert.equal(data.length, 1);
-    assert.equal(data[0].name, 'Ozark Precision Machining');
-    assert.equal(data[0].lat, 37.2100);
-    assert.equal(data[0].lng, -93.2900);
-    assert.ok(attemptedUrls.length >= 2, 'Should attempt secondary server when primary fails');
+
+    const body = await res.json();
+    assert.equal(body.success, true);
+    assert.equal(body.count, 2, 'the row with no coordinates must be dropped');
+    assert.deepEqual(body.data.map((row) => row.id), ['near', 'far'], 'closest account must be index 0');
+    assert.ok(body.data[0].distance_meters < body.data[1].distance_meters);
+    assert.equal(body.data[0].distance_miles, body.data[0].distance_meters / 1609.344);
+
+    // Canonical aliases keep the field PWA able to select, enrich and log
+    // against the stored account rather than minting a duplicate.
+    assert.equal(body.data[0].company_id, 'near');
+    assert.equal(body.data[0].company_name, 'Near Account');
+    assert.equal(body.data[0].street_1, '101 E Commercial St');
+    assert.equal(body.data[0].zip_code, '65803');
+    assert.equal(body.data[0].company_phone, '417-831-0048');
+    assert.equal(body.data[0].lat, 37.2091);
+    assert.equal(body.data[0].lng, -93.2915);
+    assert.equal(body.data[0].status, 'ACTIVE');
+    assert.equal(body.data[0].is_hdhp, 1);
+    assert.equal(body.data[0].estimated_w2_count, 25);
+    assert.equal(body.data[0].updated_at, '2026-09-01 12:00:00');
+
+    assert.equal(calls.length, 1, 'exactly one D1 read, no N+1');
+    const sql = calls[0].sql.replace(/\s+/g, ' ');
+    assert.match(sql, /SUBSTR\(geohash, 1, 6\) IN \(\?, \?, \?, \?, \?, \?, \?, \?, \?\)/i);
+    assert.match(sql, /status NOT IN \('DISQUALIFIED', 'DO_NOT_CONTACT'\)/i);
+    assert.match(sql, /agent_email = \?/i);
+
+    assert.equal(calls[0].args[0], 'sean_deardorff@us.aflac.com', 'tenant predicate binds first');
+    assert.deepEqual(
+      calls[0].args.slice(1, 10),
+      ['9ytetj', '9ytetn', '9ytetq', '9ytetm', '9ytetk', '9yteth', '9ytesu', '9ytesv', '9ytesy'],
+      'center cell followed by the eight cardinal neighbours'
+    );
+    assert.equal(calls[0].args[10], 50, 'a limit above the ceiling is capped');
+    assert.equal(calls[0].args.length, 11);
+    assert.equal(networkCalls.length, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
-
-
-
-
-
-
-
-
-
-
-
-

@@ -34,7 +34,7 @@ export const dbReady = new Promise((resolve, reject) => {
 
 export async function initStore() {
   await requestPersistentStorage();
-  
+
   // The retired roofing app's database is dead weight in the same origin.
   // Deleting it reclaims whatever queued door photos were left behind.
   try { indexedDB.deleteDatabase('SweatEquityDB'); } catch { /* best effort */ }
@@ -171,14 +171,69 @@ export const getQueueCount = () => count();
 
 export async function updatePendingBadge() {
   const pending = await count();
-  const label = `${pending} Pending`;
-  const className = pending > 0 ? 'sync-badge pending' : 'sync-badge';
+  const stuck = pending > 0
+    ? (await getQueueDiagnostics()).filter((e) => e.stuck)
+    : [];
+
+  const label = stuck.length > 0 ? `${pending} Pending · ${stuck.length} stuck` : `${pending} Pending`;
+  let className = 'sync-badge';
+  if (pending > 0) className += ' pending';
+  if (stuck.length > 0) className += ' stuck';
+
   for (const id of ['syncCount', 'syncCountDesktop']) {
     const badge = $(id);
-    if (badge) {
-      badge.textContent = label;
-      badge.className = className;
-    }
+    if (!badge) continue;
+    badge.textContent = label;
+    badge.className = className;
+    badge.title = stuck.length > 0
+      ? `Stuck: ${stuck.map((e) => `${e.label} (${e.last_error || 'unknown error'})`).join('; ')}`
+      : 'Tap to push queued visits now';
+  }
+}
+
+/**
+ * Make the pending badge do something.
+ *
+ * "A field visit is never lost" is only credible if the agent can verify it.
+ * Tapping the badge forces a push and reports what actually happened, instead
+ * of leaving him to trust a number that may not have moved in an hour.
+ */
+export function initQueueInspector() {
+  for (const id of ['syncCount', 'syncCountDesktop']) {
+    const badge = $(id);
+    if (!badge) continue;
+    badge.setAttribute('role', 'button');
+    badge.setAttribute('tabindex', '0');
+
+    const run = async () => {
+      const pending = await count();
+      if (pending === 0) {
+        showToast('Everything is synced.', 'success');
+        return;
+      }
+      if (!navigator.onLine) {
+        showToast(`${pending} visit${pending === 1 ? '' : 's'} held offline — they will send automatically.`, 'info');
+        return;
+      }
+      showToast(`Pushing ${pending} queued visit${pending === 1 ? '' : 's'}…`, 'info');
+      const drained = await forceSync();
+      const stuck = (await getQueueDiagnostics()).filter((e) => e.stuck);
+      if (stuck.length > 0) {
+        showToast(`${drained} sent · ${stuck.length} stuck: ${stuck[0].label} — ${stuck[0].last_error || 'unknown error'}`, 'error');
+      } else if (drained > 0) {
+        showToast(`${drained} visit${drained === 1 ? '' : 's'} synced.`, 'success');
+      } else {
+        showToast('Still queued — will keep retrying.', 'info');
+      }
+    };
+
+    badge.addEventListener('click', run);
+    badge.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        run();
+      }
+    });
   }
 }
 
@@ -202,22 +257,134 @@ export function updateNetworkStatus() {
 // fire in the same tick). Set synchronously before the first await.
 let isSyncing = false;
 
+/**
+ * How many times one entry may fail before it stops holding up the queue.
+ *
+ * Chronological order matters for exactly one reason: an activity log can
+ * reference a company that a queued `company_creation` has not created yet.
+ * It does NOT matter for correctness otherwise — every log carries its own
+ * client timestamp and is idempotent on log_id.
+ *
+ * The old code `break`-ed on any transient failure, which meant one entry the
+ * server kept 500-ing stranded every visit behind it, permanently, with the
+ * agent seeing only a "12 Pending" badge and no way to act. That is the exact
+ * failure CLAUDE.md rule 12 forbids. After this many tries an entry steps
+ * aside and lets the rest through; it is never discarded.
+ */
+const MAX_ORDERED_ATTEMPTS = 4;
+
+/** Backoff between automatic retry runs while anything is still queued. */
+const RETRY_DELAYS_MS = [15000, 30000, 60000, 120000, 300000];
+let consecutiveFailedRuns = 0;
+let retryTimer = null;
+
 /** Listeners notified after a successful drain, so open tables can refresh. */
 const syncListeners = new Set();
 export const onSynced = (callback) => syncListeners.add(callback);
 
+function cancelRetry() {
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+}
+
+/**
+ * Keep trying on a timer, not only on events.
+ *
+ * `online` is not reliable on Android: moving off a captive portal, or a weak
+ * signal flapping, often fires nothing at all. Without a timer a queue that
+ * failed once could sit untouched until the agent happened to log again.
+ */
+function scheduleRetry() {
+  cancelRetry();
+  const delay = RETRY_DELAYS_MS[Math.min(consecutiveFailedRuns, RETRY_DELAYS_MS.length - 1)];
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    syncQueue();
+  }, delay);
+}
+
+/** Record a failed attempt on the entry itself so it survives a reload. */
+async function noteAttempt(entry, error) {
+  entry.attempts = (entry.attempts || 0) + 1;
+  entry.last_error = String(error?.message || error || 'unknown').slice(0, 300);
+  entry.last_attempt_at = Date.now();
+  try {
+    await enqueue(entry);
+  } catch {
+    /* the counter is an optimization; losing it only costs extra retries */
+  }
+  return entry.attempts;
+}
+
+/** What is stuck and why — so the agent can see it rather than trust a number. */
+export async function getQueueDiagnostics() {
+  const entries = await readAll();
+  return entries
+    .map((entry) => ({
+      log_id: entry.log_id,
+      label: entry.company?.company_name || entry.payload?.company_name || entry.company_name || 'Field log',
+      timestamp: entry.timestamp,
+      attempts: entry.attempts || 0,
+      last_error: entry.last_error || null,
+      stuck: (entry.attempts || 0) >= MAX_ORDERED_ATTEMPTS
+    }))
+    .sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+}
+
+/** Manual "push now" for the sync badge. Returns how many entries drained. */
+export async function forceSync() {
+  consecutiveFailedRuns = 0;
+  cancelRetry();
+  return syncQueue();
+}
+
 export async function syncQueue() {
-  if (!navigator.onLine || !db || isSyncing) return;
+  if (!navigator.onLine || !db || isSyncing) return 0;
   isSyncing = true;
 
   let drained = 0;
+  let sawFailure = false;
+  // Companies whose creation is still queued or deferred. Any activity log
+  // naming one of these must wait, or the server would reject it for a missing
+  // FK and we would discard a real field visit as a 4xx.
+  const blockedCompanyIds = new Set();
+
   try {
     const entries = await readAll();
-    if (entries.length === 0) return;
+    if (entries.length === 0) return 0;
 
     entries.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
 
     for (const entry of entries) {
+      const entryCompanyId = entry.company_id || entry.payload?.company_id || entry.company?.company_id;
+      if (entryCompanyId && blockedCompanyIds.has(entryCompanyId)) continue;
+
+      /**
+       * One place decides what a failure means.
+       *   4xx  -> the server will never accept this; discard and say so.
+       *   else -> transient. Retry in order until MAX_ORDERED_ATTEMPTS, then
+       *           step aside so the rest of the day's work can still land.
+       * Returns true when the caller should stop draining entirely.
+       */
+      const handleFailure = async (err, what) => {
+        if (err.status >= 400 && err.status < 500) {
+          console.warn(`${what} rejected, discarding:`, err.message);
+          showToast(`Could not sync "${entry.company?.company_name || entry.payload?.company_name || 'an entry'}" — ${err.message}`, 'error');
+          await remove(entry.log_id);
+          return false;
+        }
+        sawFailure = true;
+        const attempts = await noteAttempt(entry, err);
+        console.error(`${what} sync failed (attempt ${attempts}), will retry:`, err);
+        if (attempts < MAX_ORDERED_ATTEMPTS) return true;  // order still worth preserving
+        if (entry.type === 'company_creation' && entryCompanyId) {
+          blockedCompanyIds.add(entryCompanyId);
+        }
+        return false;  // step aside, keep draining the rest
+      };
+
       if (entry.type === 'company_creation') {
         try {
           const payload = entry.payload || {
@@ -240,14 +407,7 @@ export async function syncQueue() {
             });
           }
         } catch (err) {
-          if (err.status >= 400 && err.status < 500) {
-            console.warn('Company creation rejected, discarding:', err.message);
-            showToast(`Could not sync company "${entry.payload?.company_name || 'new'}" — ${err.message}`, 'error');
-            await remove(entry.log_id);
-          } else {
-            console.error('Company creation sync failed, will retry:', err);
-            break; // Stop syncing remaining to maintain chronological order
-          }
+          if (await handleFailure(err, 'Company creation')) break;
         }
       } else if (entry.audioBlob) {
         try {
@@ -267,14 +427,7 @@ export async function syncQueue() {
             showToast(`Logged "${entry.company?.company_name || 'activity'}" — transcription unavailable.`, 'info');
           }
         } catch (err) {
-          if (err.status >= 400 && err.status < 500) {
-            console.warn('Voice log rejected, discarding:', err.message);
-            showToast(`Could not sync a voice log — ${err.message}`, 'error');
-            await remove(entry.log_id);
-          } else {
-            console.error('Voice log sync failed, will retry:', err);
-            break; // Stop syncing remaining to maintain chronological order
-          }
+          if (await handleFailure(err, 'Voice log')) break;
         }
       } else {
         try {
@@ -283,7 +436,11 @@ export async function syncQueue() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ logs: [toSyncPayload(entry)] })
           });
-          if (!res.ok) throw new Error(`Sync rejected (${res.status})`);
+          if (!res.ok) {
+            const error = new Error(`Sync rejected (${res.status})`);
+            error.status = res.status;
+            throw error;
+          }
           const result = await res.json();
 
           for (const logId of result.accepted || []) {
@@ -304,23 +461,32 @@ export async function syncQueue() {
             if (rejection.log_id) await remove(rejection.log_id);
           }
         } catch (err) {
-          console.error('Batch sync failed, will retry:', err);
-          break; // Stop syncing remaining to maintain chronological order
+          if (await handleFailure(err, 'Batch')) break;
         }
       }
     }
   } catch (err) {
     console.error('Sync run failed:', err);
+    sawFailure = true;
   } finally {
     isSyncing = false;
     await updatePendingBadge();
     if (drained > 0) syncListeners.forEach((cb) => cb(drained));
+
+    consecutiveFailedRuns = sawFailure ? consecutiveFailedRuns + 1 : 0;
+    // Anything left in the queue gets another attempt on a timer, whether or
+    // not the browser ever tells us the network came back.
+    const remaining = await count();
+    if (remaining > 0 && navigator.onLine) scheduleRetry();
+    else cancelRetry();
   }
+
+  return drained;
 }
 
 /** Strip client-only fields before the log crosses the wire. */
 function toSyncPayload(entry) {
-  const { audioBlob, audioType, ...rest } = entry;
+  const { audioBlob, audioType, attempts, last_error, last_attempt_at, ...rest } = entry;
   return rest;
 }
 
@@ -357,5 +523,11 @@ async function uploadVoiceLog(entry) {
 export function initConnectivityWatch() {
   window.addEventListener('online', updateNetworkStatus);
   window.addEventListener('offline', updateNetworkStatus);
+  // Returning to the app is the single most reliable "we probably have signal
+  // again" signal on Android — far more so than the online event.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') syncQueue();
+  });
+  initQueueInspector();
   updateNetworkStatus();
 }

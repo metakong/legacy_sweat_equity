@@ -328,6 +328,122 @@ function currentCompanyPayload() {
   };
 }
 
+/**
+ * How long ago a touch was, in the words an agent actually uses.
+ * `stamp` is D1's 'YYYY-MM-DD HH:MM:SS', which is UTC — parsed as such so the
+ * answer does not shift by five hours in the evening (see ARCHITECTURE.md
+ * "Timezone Handling").
+ */
+export function relativeDay(stamp, now = Date.now()) {
+  if (!stamp) return null;
+  const iso = String(stamp).trim().replace(' ', 'T');
+  const ms = Date.parse(/[Zz]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`);
+  if (Number.isNaN(ms)) return null;
+
+  const days = Math.floor((now - ms) / 86400000);
+  if (days < 0) return null;
+  if (days === 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days} days ago`;
+  if (days < 14) return 'last week';
+  if (days < 60) return `${Math.floor(days / 7)} weeks ago`;
+  return `${Math.floor(days / 30)} months ago`;
+}
+
+/**
+ * Build a dialable tel: URI, or null when the value is not a phone number.
+ *
+ * Digits only by construction — this string becomes an href, so nothing from
+ * the CRM is allowed through verbatim.
+ *
+ * The extension split is not cosmetic: the agent's list contains
+ * "417-868-8002 (Ext 1456)", and naively stripping non-digits dials
+ * 41786880021456 — a wrong number, tapped one-handed on a doorstep.
+ */
+export const telHref = (phone) => {
+  const raw = String(phone ?? '');
+  const ext = raw.match(/(?:\bext(?:ension)?\b|\bx)\.?\s*:?\s*(\d{1,6})/i);
+  const digits = raw.slice(0, ext ? ext.index : undefined).replace(/\D/g, '');
+  if (digits.length < 10) return null;
+
+  // Take the first national number; anything beyond it is a second number or
+  // stray text, never extra digits to dial.
+  const national = digits.startsWith('1') && digits.length >= 11
+    ? `+${digits.slice(0, 11)}`
+    : digits.slice(0, 10);
+
+  return ext ? `tel:${national};ext=${ext[1]}` : `tel:${national}`;
+};
+
+/**
+ * Hide the dossier shell once nothing inside it has content.
+ *
+ * Each section reveals the panel when it has something to show, but none of
+ * them ever hid it again — so moving from an enriched account to a bare one
+ * left an empty "Pre-Call Dossier" heading floating above the 3-Tap Binary,
+ * which reads as a loading failure.
+ */
+function syncDossierVisibility() {
+  const panel = $('dossierPanel');
+  if (!panel) return;
+  const hasContent =
+    !$('accountIntel')?.hidden ||
+    !$('nextActionCallout')?.hidden ||
+    !$('productTagContainer')?.hidden ||
+    !$('objectionTagContainer')?.hidden ||
+    ($('dossierList')?.childElementCount || 0) > 0;
+  panel.hidden = !hasContent;
+}
+
+/**
+ * Show what the agent knows before he walks in: who to ask for, a one-tap
+ * dial, and his own strategy note.
+ *
+ * These three columns are populated by the follow-up list import. Until this
+ * existed they were written to D1 and displayed nowhere, which is the same as
+ * not having stored them.
+ */
+function renderAccountIntel(company) {
+  const panel = $('accountIntel');
+  if (!panel) return;
+
+  const dm = company?.decision_maker ? String(company.decision_maker).trim() : '';
+  const phone = company?.company_phone ? String(company.company_phone).trim() : '';
+  const notes = company?.notes ? String(company.notes).trim() : '';
+
+  const dmRow = $('intelDecisionMaker');
+  if (dmRow) {
+    dmRow.textContent = dm ? `Ask for: ${dm}` : '';
+    dmRow.hidden = !dm;
+  }
+
+  const link = $('intelPhone');
+  const linkText = $('intelPhoneText');
+  const href = telHref(phone);
+  if (link && linkText) {
+    if (href) {
+      link.href = href;
+      linkText.textContent = phone;
+      link.hidden = false;
+    } else {
+      link.removeAttribute('href');
+      linkText.textContent = '';
+      link.hidden = true;
+    }
+  }
+
+  const notesWrap = $('intelNotesWrap');
+  const notesBody = $('intelNotes');
+  if (notesWrap && notesBody) {
+    notesBody.textContent = notes;
+    notesWrap.hidden = !notes;
+  }
+
+  const anything = Boolean(dm || href || notes);
+  panel.hidden = !anything;
+  if (anything) $('dossierPanel').hidden = false;
+}
+
 function showNextActionCallout(nextActionText) {
   const callout = $('nextActionCallout');
   const textEl = $('nextActionText');
@@ -507,10 +623,16 @@ export function applyCompany(company) {
     $('companyMatchHint').textContent = `Known account · 📅 Upcoming Renewal (Window Active) · renewal date ${company.renewal_date || 'Open Enrollment'}`;
     $('companyMatchHint').className = 'field-hint is-match';
   } else {
+    // Recency, not just a count. "3 touches" does not stop an agent walking
+    // back into a business he already saw this morning; "last touched today"
+    // does.
+    const when = relativeDay(company.last_touched);
     $('companyMatchHint').textContent = touches > 0
-      ? `Known account · ${touches} previous ${touches === 1 ? 'touch' : 'touches'} · status ${company.latest_disposition || company.rating || 'Cold'}`
+      ? `Known account · ${touches} previous ${touches === 1 ? 'touch' : 'touches'}${when ? ` · last touched ${when}` : ''} · status ${company.latest_disposition || company.rating || 'Cold'}`
       : `Known account · not yet contacted · rating ${company.rating || 'Cold'}`;
-    $('companyMatchHint').className = 'field-hint is-match';
+    $('companyMatchHint').className = touches > 0 && when === 'today'
+      ? 'field-hint is-match is-recent'
+      : 'field-hint is-match';
   }
 
   const lat = company.lat;
@@ -522,6 +644,8 @@ export function applyCompany(company) {
       fieldMap.flyTo({ center: [lng, lat], zoom: 16 });
     }
   }
+
+  renderAccountIntel(company);
 
   // Surface AI Next Action if recorded
   if (company.latest_next_action) {
@@ -543,6 +667,8 @@ export function applyCompany(company) {
   } else {
     renderObjections(null);
   }
+
+  syncDossierVisibility();
 }
 
 function clearCompanySelection() {
@@ -550,9 +676,11 @@ function clearCompanySelection() {
   state.selectedCompany = null;
   $('companyMatchHint').textContent = 'New account — will be created on save.';
   $('companyMatchHint').className = 'field-hint';
+  renderAccountIntel(null);
   showNextActionCallout(null);
   renderProductInterests(null);
   renderObjections(null);
+  syncDossierVisibility();
 }
 
 function initCompanySearch() {
@@ -1262,8 +1390,11 @@ function initRadarScan() {
     btn.textContent = '📡 Scanning…';
 
     try {
-      const results = await apiFetch(`/api/radar?lat=${center.lat}&lng=${center.lng}`);
-      const pois = Array.isArray(results) ? results : (results.results || []);
+      const response = await apiFetch(`/api/radar?lat=${center.lat}&lng=${center.lng}`);
+      // The route answers { success, count, data }. The older shapes are still
+      // accepted so a cached service-worker bundle mid-upgrade does not blank
+      // the map during a deploy.
+      const pois = Array.isArray(response) ? response : (response.data || response.results || []);
 
       if (radarLayer) {
         radarLayer.clearLayers();
@@ -1272,15 +1403,19 @@ function initRadarScan() {
       }
 
       if (pois.length === 0) {
-        showToast('Radar found no new commercial POIs within 1 mile.', 'info');
+        showToast('No saved accounts near here. Walk on, or scan again after importing leads.', 'info');
         return;
       }
 
       pois.forEach((poi) => {
         if (poi.lat === undefined || poi.lng === undefined) return;
 
+        const label = poi.company_name || poi.name || 'Account';
+        const miles = typeof poi.distance_miles === 'number' ? poi.distance_miles : null;
+        const travel = miles === null ? '' : (miles < 0.1 ? ' — under 0.1 mi' : ` — ${miles.toFixed(2)} mi`);
+
         const icon = L.divIcon({
-          html: `<div class="radar-pin-dot" title="${poi.name || 'Target'}">🏢</div>`,
+          html: `<div class="radar-pin-dot" title="${label}">🏢</div>`,
           className: 'custom-radar-pin',
           iconSize: [28, 28],
           iconAnchor: [14, 14]
@@ -1289,18 +1424,25 @@ function initRadarScan() {
         const marker = L.marker([poi.lat, poi.lng], { icon });
 
         marker.on('click', () => {
+          // Radar now reports accounts that already exist in D1, so the pin
+          // carries a real company_id. Selecting it must reuse that id — the
+          // previous crypto.randomUUID()/isNew path would have created a
+          // duplicate of an account the agent already owns.
           selectCompany({
-            company_id: crypto.randomUUID(),
-            company_name: poi.name,
+            company_id: poi.company_id,
+            company_name: label,
             street_1: poi.street_1 || '',
             city: poi.city || '',
             state: poi.state || '',
             zip_code: poi.zip_code || '',
             lat: poi.lat,
-            lng: poi.lng,
-            isNew: true
+            long: poi.lng,
+            company_phone: poi.company_phone || '',
+            status: poi.status,
+            confidence_score: poi.confidence_score,
+            distance_miles: miles
           });
-          showToast(`Selected uncharted target: ${poi.name}`, 'info');
+          showToast(`Selected ${label}${travel}`, 'info');
         });
 
         if (radarLayer) {
@@ -1308,7 +1450,7 @@ function initRadarScan() {
         }
       });
 
-      showToast(`Radar: plotted ${pois.length} uncharted ${pois.length === 1 ? 'target' : 'targets'} nearby.`, 'success');
+      showToast(`Radar: plotted ${pois.length} nearby ${pois.length === 1 ? 'account' : 'accounts'}, closest first.`, 'success');
     } catch (err) {
       console.error('Radar scan failed:', err);
       showToast('Radar scan failed. Check network connectivity.', 'error');

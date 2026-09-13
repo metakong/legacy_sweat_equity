@@ -33,11 +33,13 @@ import { businessDate, businessDayRangeUtc } from './lib/time.js';
 import companiesRouter, { contacts as contactsRouter, enums as enumsRouter, importRouter } from './routes/companies.js';
 import activityRouter, { root as activityRootRouter, audio as audioRouter } from './routes/activity.js';
 import enrichRouter from './routes/enrich.js';
-import eodRouter from './routes/eod.js';
+import eodRouter, { handleEodAggregates } from './routes/eod.js';
 import routingRouter from './routes/routing.js';
 import exportsRouter from './routes/exports.js';
 import pipelineRouter from './routes/pipeline.js';
 import radarRouter, { handleRadar } from './routes/radar.js';
+import voiceRouter, { handleVoiceDebrief } from './routes/voice.js';
+import leadsRouter, { handleLeads } from './routes/leads.js';
 import { classifyIndustry } from './lib/ai.js';
 
 const app = new Hono();
@@ -117,6 +119,10 @@ app.route('/api/contacts', contactsRouter);
 app.route('/api/enums', enumsRouter);
 app.route('/api/enrich', enrichRouter);
 app.route('/api/eod-debrief', eodRouter);
+// The D365 compliance block lives in the same module as the debrief (one file
+// owns the end of the day) but gets a flat path, because it is pasted into a
+// CRM rather than read as a report.
+app.get('/api/eod-aggregates', handleEodAggregates);
 app.route('/api/route', routingRouter);
 app.route('/api/export', exportsRouter);
 app.route('/api/exports', exportsRouter);
@@ -125,6 +131,10 @@ app.route('/api/audio', audioRouter);
 app.route('/api/activity', activityRouter);
 app.route('/api/radar', radarRouter);
 app.get('/api/radar', handleRadar);
+app.route('/api/voice-debrief', voiceRouter);
+app.post('/api/voice-debrief', handleVoiceDebrief);
+app.route('/api/leads', leadsRouter);
+app.get('/api/leads', handleLeads);
 
 // /api/transcribe-and-log and /api/sync are part of the external contract and
 // live at the API root rather than under /api/activity.

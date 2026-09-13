@@ -44,7 +44,8 @@ import {
   companyExists
 } from '../lib/db.js';
 import { businessDate, businessDayRangeUtc } from '../lib/time.js';
-import { DEFAULT_MODELS, ProviderError, transcribeAudio, chatCompletion, geocodeAddress } from '../lib/ai.js';
+import { DEFAULT_MODELS, ProviderError, transcribeAudio, chatCompletion, geocodeAddress, audioExtensionFor } from '../lib/ai.js';
+import { mapVoiceActivityType } from './voice.js';
 
 /** Mounted at /api/activity — reads, silent logs, tier bookkeeping. */
 const activity = new Hono();
@@ -55,22 +56,42 @@ const activity = new Hono();
  */
 export const root = new Hono();
 
-// Containers MediaRecorder actually produces, plus what a desktop mic app
-// might upload. Groq sniffs the container, so the extension has to be right.
-const AUDIO_EXTENSIONS = {
-  'audio/webm': 'webm',
-  'audio/ogg': 'ogg',
-  'audio/mp4': 'm4a',
-  'audio/aac': 'aac',
-  'audio/mpeg': 'mp3',
-  'audio/wav': 'wav',
-  'audio/flac': 'flac'
+// Audio container → file extension now lives in src/lib/ai.js so the R2 object
+// key written here and the filename sent to Groq can never disagree.
+const extensionFor = audioExtensionFor;
+
+// ---------------------------------------------------------------------
+// QUICK DROPS (Agency OS dialer + canvass)
+//
+// A quick drop is the one-tap disposition the dialer fires between calls. The
+// values are SCREAMING_SNAKE so they can never collide with the Title Case D365
+// DISPOSITIONS — `WRONG_NUMBER` and `Wrong Number` are different contracts, and
+// the two payload shapes stay distinguishable without a mode flag.
+// ---------------------------------------------------------------------
+
+export const QUICK_DROP_DISPOSITIONS = [
+  'VM_NO_ANSWER',
+  'GATEKEEPER_BLOCK',
+  'WRONG_NUMBER'
+];
+
+export const QUICK_DROP_MODES = ['PHONE', 'FIELD'];
+
+/** Human wording stored on the append-only activity row. */
+const QUICK_DROP_LABELS = {
+  VM_NO_ANSWER: 'Voicemail / no answer',
+  GATEKEEPER_BLOCK: 'Gatekeeper blocked',
+  WRONG_NUMBER: 'Wrong number'
 };
 
-const extensionFor = (mimeType) => {
-  const base = String(mimeType || '').split(';')[0].trim().toLowerCase();
-  return AUDIO_EXTENSIONS[base] || 'webm';
-};
+/**
+ * A wrong number means the contact path on this account is simply wrong, so the
+ * record must stop consuming dials: status DISQUALIFIED and confidence 0.
+ *
+ * A voicemail is NOT disqualifying — it is a dial that has to be tried again
+ * tomorrow, so the touch is logged and the account is left intact.
+ */
+const QUICK_DROP_DISQUALIFYING = new Set(['WRONG_NUMBER']);
 
 // ---------------------------------------------------------------------
 // LLM STRUCTURING PASS
@@ -291,7 +312,7 @@ root.post('/transcribe-and-log', async (c) => {
   let degraded = null;
 
   try {
-    transcript = await transcribeAudio(c.env, audio, filename);
+    transcript = (await transcribeAudio(audio, { env: c.env, filename })).text;
     if (!transcript) degraded = 'empty_transcript';
   } catch (err) {
     console.error('Transcription failed:', err);
@@ -396,6 +417,20 @@ activity.post('/', async (c) => {
     return c.json({ error: 'Malformed JSON body' }, 400);
   }
 
+  // Quick Drop (Agency OS dialer / canvass) takes precedence whenever the
+  // disposition is one of the SCREAMING_SNAKE values, which the legacy silent-log
+  // path can never produce.
+  const quickDrop = matchEnum(body?.disposition, QUICK_DROP_DISPOSITIONS);
+  if (quickDrop) return handleQuickDrop(c, body, quickDrop, userEmail);
+
+  // An Agency OS payload always carries `mode`. If it also carries a
+  // disposition that is not a valid quick drop, the client has a typo — and
+  // falling through to the legacy path would quietly write an all-zeroes
+  // "No Contact" row for what was meant to be a one-tap outcome.
+  if (body?.mode !== undefined && body?.disposition !== undefined) {
+    return c.json({ error: `disposition must be one of ${QUICK_DROP_DISPOSITIONS.join(', ')}` }, 400);
+  }
+
   try {
     const result = await writeQueuedLog(c.env, body, userEmail);
     return c.json({ success: true, ...result });
@@ -404,6 +439,113 @@ activity.post('/', async (c) => {
     throw err;
   }
 });
+
+/**
+ * POST /api/activity — one-tap disposition from the dialer or canvass list.
+ *
+ * Body: { company_id, disposition: QUICK_DROP_DISPOSITIONS, mode: 'PHONE'|'FIELD' }
+ *
+ * ONE transaction for three writes:
+ *   1. an append-only `activities` row (the audit trail),
+ *   2. the D365 compliance counter for the business day,
+ *   3. a company suppression when the disposition invalidates the record.
+ *
+ * If the counter write fails there must be no activity row either: compliance
+ * numbers that disagree with the touch log are worse than a failed request,
+ * because nobody can tell afterwards which of the two is right.
+ */
+async function handleQuickDrop(c, body, disposition, userEmail) {
+  const companyId = asId(body?.company_id);
+  if (!companyId) return c.json({ error: 'company_id is required' }, 400);
+
+  const mode = String(body?.mode || 'PHONE').trim().toUpperCase();
+  if (!QUICK_DROP_MODES.includes(mode)) {
+    return c.json({ error: `mode must be one of ${QUICK_DROP_MODES.join(', ')}` }, 400);
+  }
+
+  // Checked before the batch so a stale card in the dialer answers 404 rather
+  // than failing on the foreign key with a 500.
+  if (!(await companyExists(c.env.DB, companyId, userEmail))) {
+    return c.json({ error: 'Unknown company_id' }, 404);
+  }
+
+  const activityType = mapVoiceActivityType(mode, disposition);
+  const disqualified = QUICK_DROP_DISQUALIFYING.has(disposition);
+
+  // A quick drop is by definition not a decision-maker conversation, so
+  // dm_contacts stays 0; the physical verb (dial or walk-in) is what counts.
+  const counters = mode === 'PHONE'
+    ? { phone_dials: 1, dm_contacts: 0, walk_ins: 0, appointments_set: 0 }
+    : { phone_dials: 0, dm_contacts: 0, walk_ins: 1, appointments_set: 0 };
+
+  let activityId = null;
+
+  try {
+    const statements = [];
+
+    statements.push(c.env.DB.prepare(`
+      INSERT INTO activities (
+        company_id, agent_email, activity_type, mode, notes, outcome,
+        raw_transcript, extracted_json, next_action, next_action_date
+      ) VALUES (?, ?, ?, ?, ?, ?, '', ?, 'NONE', NULL)
+    `).bind(
+      companyId,
+      userEmail,
+      activityType,
+      mode,
+      `Quick drop: ${QUICK_DROP_LABELS[disposition]}`,
+      disposition,
+      JSON.stringify({ quick_drop: true, disposition, mode, company_id: companyId })
+    ));
+
+    const activityStatementIndex = statements.length - 1;
+
+    // Keyed to the Springfield business date, never UTC.
+    statements.push(c.env.DB.prepare(`
+      INSERT INTO d365_daily_aggregates (
+        business_date, agent_email, phone_dials, dm_contacts, walk_ins, appointments_set, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(business_date, agent_email) DO UPDATE SET
+        phone_dials      = d365_daily_aggregates.phone_dials + excluded.phone_dials,
+        dm_contacts      = d365_daily_aggregates.dm_contacts + excluded.dm_contacts,
+        walk_ins         = d365_daily_aggregates.walk_ins + excluded.walk_ins,
+        appointments_set = d365_daily_aggregates.appointments_set + excluded.appointments_set,
+        updated_at       = datetime('now')
+    `).bind(
+      businessDate(),
+      userEmail,
+      counters.phone_dials,
+      counters.dm_contacts,
+      counters.walk_ins,
+      counters.appointments_set
+    ));
+
+    if (disqualified) {
+      statements.push(c.env.DB.prepare(`
+        UPDATE companies
+        SET status = 'DISQUALIFIED',
+            verification_status = 'DISQUALIFIED',
+            confidence_score = 0
+        WHERE company_id = ? AND agent_email = ?
+      `).bind(companyId, userEmail));
+    }
+
+    const results = await c.env.DB.batch(statements);
+    activityId = results?.[activityStatementIndex]?.meta?.last_row_id ?? null;
+  } catch (err) {
+    console.error('Quick drop commit failed:', err);
+    return c.json({ error: 'Quick drop could not be committed' }, 500);
+  }
+
+  return c.json({
+    success: true,
+    activity_id: activityId,
+    company_id: companyId,
+    disposition,
+    activity_type: activityType,
+    disqualified
+  });
+}
 
 /**
  * Write one queued entry: optional inline company + contact, then the log.

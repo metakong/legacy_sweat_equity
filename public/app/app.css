@@ -2406,3 +2406,688 @@ input[type="checkbox"] {
 
 
 
+
+/* ---------------------------------------------------------------------
+   ACCOUNT INTEL — decision maker, one-tap dial, strategy note.
+   Populated from the follow-up list import (decision_maker / company_phone /
+   notes). Green rather than gold so it reads as "what you already know"
+   next to the gold AI Next Action callout.
+   --------------------------------------------------------------------- */
+.account-intel {
+  background: linear-gradient(135deg, rgba(0, 200, 83, 0.12), rgba(77, 138, 240, 0.10));
+  border: 1px solid rgba(0, 200, 83, 0.30);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.account-intel .callout-header { color: var(--success); }
+
+.intel-row {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-main);
+  line-height: 1.4;
+}
+
+/* A real touch target: this gets tapped one-handed, walking, in sunlight. */
+.intel-call {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: var(--touch-target);
+  padding: 0 1rem;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 200, 83, 0.16);
+  border: 1px solid rgba(0, 200, 83, 0.45);
+  color: var(--text-main);
+  font-size: 1rem;
+  font-weight: 700;
+  text-decoration: none;
+  align-self: flex-start;
+}
+
+.intel-call:active { background: rgba(0, 200, 83, 0.28); }
+
+.intel-notes > summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  min-height: var(--touch-target);
+  display: flex;
+  align-items: center;
+}
+
+.intel-notes-body {
+  font-size: 0.9rem;
+  color: var(--text-main);
+  line-height: 1.5;
+  /* Notes accumulate across passes and carry the agent's own newlines. */
+  white-space: pre-wrap;
+  padding-top: 0.35rem;
+}
+
+/* Touched today — the strongest signal against walking back in on yourself. */
+.field-hint.is-recent {
+  color: var(--warning);
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------------------
+   SYNC BADGE — now a control, not a label. Tapping it forces a push and
+   reports the result, because "a field visit is never lost" is only
+   credible if the agent can check.
+   --------------------------------------------------------------------- */
+.sync-badge[role="button"] { cursor: pointer; }
+
+.sync-badge[role="button"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* An entry that has exhausted its ordered retries. It is still queued and
+   will still be retried — but it is no longer holding up the rest, and the
+   agent needs to know it exists. */
+.sync-badge.stuck {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: var(--error);
+}
+
+/* =====================================================================
+   SPRINT 4 — AGENCY OS SHELL, DIALER, CANVASS
+   ===================================================================== */
+
+/* The legacy console is hidden with CSS, never detached: its scripts keep
+   their element references and their listeners, and this one attribute is the
+   only thing standing between them and the screen. */
+body[data-agency-shell="active"] #legacy-shell { display: none; }
+body:not([data-agency-shell="active"]) .agency-views { display: none; }
+
+/* ── Top bar ──────────────────────────────────────── */
+.agency-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(10, 13, 20, 0.94);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  border-bottom: 1px solid var(--card-border);
+}
+
+.agency-topbar-brand {
+  font-size: 0.9rem;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  color: var(--accent-gold);
+  white-space: nowrap;
+}
+
+.agency-mode-switch {
+  display: flex;
+  gap: 0.35rem;
+  flex: 1;
+  justify-content: center;
+}
+
+.agency-mode-btn {
+  min-height: var(--touch-target);
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--card-border-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  font-weight: 700;
+  font-size: 0.85rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.agency-mode-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.agency-topbar-actions { display: flex; gap: 0.35rem; }
+
+.agency-icon-btn {
+  width: var(--touch-target);
+  height: var(--touch-target);
+  border-radius: 50%;
+  border: 1px solid var(--card-border-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  font-size: 1.1rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.agency-icon-btn[aria-pressed="true"] {
+  background: var(--accent-gold);
+  border-color: var(--accent-gold);
+  color: #101010;
+}
+
+/* ── Workspace container ──────────────────────────── */
+.agency-views {
+  padding: 0.75rem 0.75rem 2.5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.agency-view-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  margin-bottom: 0.6rem;
+}
+
+.agency-empty {
+  background: var(--bg-card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+}
+
+.agency-empty h2 { font-size: 1.05rem; margin-bottom: 0.4rem; }
+.agency-empty p { font-size: 0.85rem; color: var(--text-muted); }
+
+.agency-view-note, .agency-view-body > p { font-size: 0.85rem; color: var(--text-muted); }
+
+/* ── Phone Mode — dialer ──────────────────────────── */
+.dialer-progress {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.dialer-status {
+  min-height: 1.2rem;
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--accent-gold);
+}
+
+.dialer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  background: var(--bg-card);
+  border: 1px solid var(--card-border-strong);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+}
+
+.dialer-company { font-size: 1.35rem; font-weight: 800; line-height: 1.2; }
+.dialer-dm { font-size: 1rem; font-weight: 600; color: var(--accent-gold); }
+
+/* The dial target is deliberately the largest thing on the screen: it is the
+   one control used a hundred times a day, one-handed, often in sunlight. */
+.dialer-call {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 72px;
+  margin-top: 0.5rem;
+  border-radius: var(--radius-md);
+  background: var(--success);
+  color: #04120a;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-decoration: none;
+}
+
+.dialer-call-missing {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.dialer-meta { font-size: 0.78rem; color: var(--text-muted); }
+
+.quick-drop-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+
+.quick-drop-btn {
+  min-height: 64px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--card-border-strong);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-main);
+  font-weight: 700;
+  font-size: 0.82rem;
+  line-height: 1.15;
+  cursor: pointer;
+}
+
+.quick-drop-btn:disabled { opacity: 0.45; }
+.quick-drop-wrong_number { border-color: rgba(239, 68, 68, 0.5); }
+
+/* Post-call prompt: the agent just came back from the native dialer and owes a
+   disposition. Three pulses, then it stops nagging. */
+@keyframes agency-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.75); }
+  50% { box-shadow: 0 0 0 10px rgba(245, 166, 35, 0); }
+}
+
+.dialer-view.needs-disposition .quick-drop-btn,
+.dialer-view.needs-disposition .voice-hold-btn {
+  border-color: var(--accent-gold);
+  animation: agency-pulse 1.1s ease-in-out 3;
+}
+
+/* ── Field Mode — canvass route ───────────────────── */
+.canvass-status {
+  min-height: 1.1rem;
+  font-size: 0.82rem;
+  color: var(--accent-gold);
+  margin-bottom: 0.4rem;
+}
+
+.canvass-summary {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+}
+
+.canvass-block {
+  background: var(--bg-card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 0.9rem;
+  margin-bottom: 0.9rem;
+}
+
+.canvass-block-title { font-size: 0.95rem; font-weight: 800; margin-bottom: 0.55rem; }
+
+.canvass-stop-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.canvass-stop {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.6rem;
+  border-left: 3px solid var(--accent);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-sm);
+}
+
+/* A stop with no coordinates cannot be routed; it is shown and flagged rather
+   than silently dropped from the list. */
+.canvass-stop-unroutable { border-left-color: var(--warning); }
+
+.canvass-stop-name { font-weight: 700; font-size: 0.95rem; }
+.canvass-stop-address { font-size: 0.78rem; color: var(--text-muted); }
+.canvass-stop-meta { font-size: 0.74rem; font-weight: 600; color: var(--accent-gold); }
+
+.canvass-launch {
+  display: block;
+  margin-top: 0.7rem;
+  min-height: 52px;
+  line-height: 52px;
+  text-align: center;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.canvass-launch-disabled {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+/* ── Hold-to-Talk ─────────────────────────────────── */
+.voice-widget { margin-top: 0.9rem; }
+
+.voice-hold-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 72px;
+  border-radius: var(--radius-md);
+  border: 2px solid var(--accent);
+  background: rgba(77, 138, 240, 0.12);
+  color: var(--text-main);
+  font-weight: 800;
+  font-size: 1rem;
+  cursor: pointer;
+  /* A long press must not scroll the page or select the label text, or the
+     hold never completes. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.voice-hold-btn.recording,
+.voice-hold-btn[aria-pressed="true"] {
+  background: var(--error);
+  border-color: var(--error);
+  color: #ffffff;
+}
+
+.voice-widget-status {
+  min-height: 1.1rem;
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+@media (max-width: 480px) {
+  .agency-topbar-brand { display: none; }
+  .agency-mode-btn { padding: 0.4rem 0.55rem; font-size: 0.76rem; }
+  .quick-drop-btn { font-size: 0.74rem; }
+}
+
+/* =====================================================================
+   SUN GLARE — high-contrast theme
+
+   Sunny-day mode. The OLED palette optimizes for battery; this one optimizes
+   for being read through glare at arm's length, so it inverts the surfaces,
+   forces weight, and thickens every border to 2px.
+   ===================================================================== */
+html[data-theme="high-contrast"] {
+  --bg-true-black: #ffffff;
+  --bg-primary: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --bg-inset: #ffffff;
+  --card-border: #000000;
+  --card-border-strong: #000000;
+  --text-main: #000000;
+  --text-muted: #1a1a1a;
+  --accent: #14428f;
+  --accent-hover: #0f3271;
+  --accent-gold: #6b3f00;
+  --accent-gold-hover: #523000;
+  --success: #0a6b2f;
+  --warning: #6b3f00;
+  --error: #a11212;
+}
+
+html[data-theme="high-contrast"] body {
+  background: #ffffff;
+  background-image: none;
+  color: #000000;
+  font-weight: 600;
+}
+
+html[data-theme="high-contrast"] .agency-topbar {
+  background: #ffffff;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-bottom: 2px solid #000000;
+}
+
+html[data-theme="high-contrast"] .agency-topbar-brand { color: #000000; }
+
+html[data-theme="high-contrast"] .agency-mode-btn {
+  background: #ffffff;
+  border: 2px solid #000000;
+  color: #000000;
+}
+
+/* Yellow on black is the highest-contrast pairing available in sunlight. */
+html[data-theme="high-contrast"] .agency-mode-btn.active {
+  background: #f5c518;
+  border-color: #000000;
+  color: #000000;
+}
+
+html[data-theme="high-contrast"] .agency-icon-btn {
+  background: #ffffff;
+  border: 2px solid #000000;
+  color: #000000;
+}
+
+html[data-theme="high-contrast"] .agency-icon-btn[aria-pressed="true"] {
+  background: #f5c518;
+  border-color: #000000;
+  color: #000000;
+}
+
+html[data-theme="high-contrast"] .dialer-card,
+html[data-theme="high-contrast"] .canvass-block,
+html[data-theme="high-contrast"] .agency-empty {
+  background: #ffffff;
+  border: 2px solid #000000;
+}
+
+html[data-theme="high-contrast"] .dialer-company,
+html[data-theme="high-contrast"] .canvass-stop-name,
+html[data-theme="high-contrast"] .canvass-block-title,
+html[data-theme="high-contrast"] .agency-view-title { color: #000000; }
+
+html[data-theme="high-contrast"] .dialer-dm,
+html[data-theme="high-contrast"] .canvass-stop-meta,
+html[data-theme="high-contrast"] .dialer-status { color: #6b3f00; }
+
+html[data-theme="high-contrast"] .dialer-meta,
+html[data-theme="high-contrast"] .canvass-stop-address,
+html[data-theme="high-contrast"] .canvass-summary,
+html[data-theme="high-contrast"] .voice-widget-status,
+html[data-theme="high-contrast"] .dialer-progress { color: #000000; }
+
+html[data-theme="high-contrast"] .dialer-call {
+  background: #0a6b2f;
+  color: #ffffff;
+  border: 2px solid #000000;
+}
+
+html[data-theme="high-contrast"] .dialer-call-missing {
+  background: #e5e5e5;
+  color: #000000;
+}
+
+html[data-theme="high-contrast"] .quick-drop-btn,
+html[data-theme="high-contrast"] .voice-hold-btn {
+  background: #ffffff;
+  border: 2px solid #000000;
+  color: #000000;
+}
+
+html[data-theme="high-contrast"] .voice-hold-btn[aria-pressed="true"] {
+  background: #a11212;
+  border-color: #000000;
+  color: #ffffff;
+}
+
+html[data-theme="high-contrast"] .canvass-stop {
+  background: #ffffff;
+  border-left: 4px solid #000000;
+}
+
+html[data-theme="high-contrast"] .canvass-launch {
+  background: #14428f;
+  color: #ffffff;
+  border: 2px solid #000000;
+}
+
+html[data-theme="high-contrast"] .canvass-launch-disabled {
+  background: #e5e5e5;
+  color: #000000;
+}
+
+/* ── Triage Mode ──────────────────────────────────── */
+.triage-view { display: flex; flex-direction: column; gap: 0.9rem; }
+
+.triage-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+}
+
+.triage-panel-title { font-size: 0.95rem; font-weight: 800; margin-bottom: 0.6rem; }
+
+.triage-file {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  padding: 0.6rem;
+  margin-bottom: 0.6rem;
+  border: 1px dashed var(--card-border-strong);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-main);
+  font-size: 0.82rem;
+}
+
+.triage-action-btn,
+.d365-export-btn {
+  width: 100%;
+  min-height: 56px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.triage-action-btn:disabled,
+.d365-export-btn:disabled { opacity: 0.55; }
+
+.triage-status,
+.d365-export-status {
+  min-height: 1.1rem;
+  margin-top: 0.45rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.triage-count {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 0.55rem;
+}
+
+.triage-grid { display: flex; flex-direction: column; gap: 0.5rem; }
+
+.triage-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.2rem 0.6rem;
+  align-items: center;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--card-border);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.triage-row-name { font-weight: 700; font-size: 0.92rem; }
+.triage-row-address { font-size: 0.75rem; color: var(--text-muted); }
+.triage-row-meta { font-size: 0.75rem; color: var(--text-muted); }
+
+/* The disqualify button spans the whole row height: on a phone it is the only
+   thing on this screen that gets tapped, so it gets the whole right edge. */
+.triage-dq-btn {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  align-self: center;
+  min-height: 48px;
+  padding: 0 0.8rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--text-main);
+  font-weight: 700;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.triage-dq-btn:disabled { opacity: 0.5; }
+
+.d365-export { margin-top: 0.2rem; }
+
+/* Only shown when the clipboard is unreachable, so the block stays selectable. */
+.d365-export-fallback {
+  margin-top: 0.5rem;
+  padding: 0.6rem;
+  border: 1px solid var(--card-border-strong);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+.d365-export-fallback[hidden] { display: none; }
+
+@media (max-width: 480px) {
+  .triage-row { grid-template-columns: 1fr; }
+  .triage-dq-btn { grid-column: 1; grid-row: auto; margin-top: 0.4rem; }
+}
+
+html[data-theme="high-contrast"] .triage-panel,
+html[data-theme="high-contrast"] .triage-row,
+html[data-theme="high-contrast"] .d365-export-fallback {
+  background: #ffffff;
+  border: 2px solid #000000;
+}
+
+html[data-theme="high-contrast"] .triage-panel-title,
+html[data-theme="high-contrast"] .triage-row-name { color: #000000; }
+
+html[data-theme="high-contrast"] .triage-status,
+html[data-theme="high-contrast"] .triage-count,
+html[data-theme="high-contrast"] .triage-row-address,
+html[data-theme="high-contrast"] .triage-row-meta,
+html[data-theme="high-contrast"] .d365-export-status { color: #000000; }
+
+html[data-theme="high-contrast"] .triage-file {
+  background: #ffffff;
+  border: 2px dashed #000000;
+  color: #000000;
+}
+
+html[data-theme="high-contrast"] .triage-action-btn,
+html[data-theme="high-contrast"] .d365-export-btn {
+  background: #14428f;
+  border: 2px solid #000000;
+  color: #ffffff;
+}
+
+html[data-theme="high-contrast"] .triage-dq-btn {
+  background: #ffffff;
+  border: 2px solid #000000;
+  color: #a11212;
+  font-weight: 800;
+}
+

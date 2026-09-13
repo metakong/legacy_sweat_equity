@@ -54,6 +54,11 @@ export const LIMITS = {
   checksum: 256,
   searchQuery: 200,
   syncBatch: 100,
+  decisionMaker: 300,
+  // One import request geocodes and AI-classifies each net-new company, so the
+  // cap bounds outbound subrequests. It is enforced by REPORTING the overflow,
+  // never by silently truncating — see handleImport.
+  importBatch: 250,
   routeStops: 24,          // Up to 24 stops for multi-leg route staging (12 per leg)
   audioBytes: 20 * 1024 * 1024,
   dossierChars: 2000
@@ -172,15 +177,25 @@ export const asMoney = (value) => {
   return Math.round(n * 100) / 100;
 };
 
-export const asLatitude = (value) => {
+/**
+ * Latitude / longitude coercion.
+ *
+ * Number(null) and Number('') are BOTH 0, so the naive `Number(value)` form
+ * silently promoted a missing coordinate into a real one on the equator and
+ * the prime meridian: an ungeocoded account became a 0,0 pin, and an empty
+ * `?lat=` query parameter was a valid location. A genuine numeric zero is a
+ * real coordinate and must still survive.
+ */
+const finiteInRange = (value, minimum, maximum) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
   const n = Number(value);
-  return Number.isFinite(n) && n >= -90 && n <= 90 ? n : null;
+  return Number.isFinite(n) && n >= minimum && n <= maximum ? n : null;
 };
 
-export const asLongitude = (value) => {
-  const n = Number(value);
-  return Number.isFinite(n) && n >= -180 && n <= 180 ? n : null;
-};
+export const asLatitude = (value) => finiteInRange(value, -90, 90);
+
+export const asLongitude = (value) => finiteInRange(value, -180, 180);
 
 export const asCount = (value, max = 1000000) => {
   const n = Number(value);

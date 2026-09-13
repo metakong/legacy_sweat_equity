@@ -34,6 +34,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { app } from '../src/index.js';
 import { createD1 } from '../mockEnv.js';
+import { LIMITS } from '../src/lib/validate.js';
 
 const AGENT = 'sean_deardorff@us.aflac.com';
 const ROOT = process.cwd();
@@ -110,6 +111,24 @@ function buildMigratedDb() {
   // The orphan the failed 0002 run left behind; 0003 must clear it.
   raw.exec(`CREATE TABLE new_companies (company_id TEXT, agent_email TEXT NOT NULL DEFAULT 'x', PRIMARY KEY (company_id, agent_email))`);
   for (const statement of statementsOf('migrations/0003_add_agent_email.sql')) {
+    raw.exec(statement);
+  }
+  // 0004 adds the field-intelligence columns. Production runs the migrated
+  // shape, so every migration that schema.sql carries must also be applied
+  // here — otherwise this suite passes while the live database rejects the
+  // INSERT, which is precisely the class of failure this file exists to catch.
+  for (const statement of statementsOf('migrations/0004_company_intel.sql')) {
+    raw.exec(statement);
+  }
+  // 0004 V2 adds the Section 125, confidence and Geohash columns. The same
+  // rule applies: without it the migrated shape rejects the widened
+  // upsertCompany INSERT while the fresh shape accepts it.
+  for (const statement of statementsOf('migrations/0004_v2_agency_os.sql')) {
+    raw.exec(statement);
+  }
+  // 0005 adds verification_status, the append-only activities log and the
+  // D365 counter buffer the voice orchestrator writes through.
+  for (const statement of statementsOf('migrations/0005_voice_orchestration.sql')) {
     raw.exec(statement);
   }
   raw.close();
@@ -196,7 +215,10 @@ const READ_ENDPOINTS = [
   '/api/export/tier2',
   '/api/telemetry',
   '/api/enums',
-  '/api/health'
+  '/api/health',
+  // The radar route reads only D1 now. It must answer against both database
+  // shapes without an outbound network call.
+  '/api/radar?lat=37.2089&lng=-93.2923'
 ];
 
 for (const shape of ['fresh', 'migrated']) {
@@ -315,6 +337,154 @@ for (const shape of ['fresh', 'migrated']) {
       '2026-09-15'
     );
   });
+
+  // -------------------------------------------------------------------
+  // 2026-09-01 DUPLICATE-IMPORT REGRESSION
+  //
+  // A 63-target follow-up list was pushed twice. The second push carried
+  // notes but no street, the dedupe guard required a street to even look,
+  // and all 50 records that survived the batch cap were inserted as new
+  // companies. These tests fail against that code and pass against the
+  // identity resolver in src/lib/match.js.
+  // -------------------------------------------------------------------
+
+  const importInto = (env, companies) => call(env, '/api/companies/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ companies })
+  });
+  const nameCount = (env, name) =>
+    env.DB._raw.prepare('SELECT COUNT(*) n FROM companies WHERE company_name = ?').get(name).n;
+
+  test(`[${shape} schema] a notes-only enrichment pass merges instead of duplicating`, async () => {
+    const env = envFor(shape === 'fresh' ? buildFreshDb() : buildMigratedDb());
+
+    // Exactly the enrichment payload that caused the incident: a name the
+    // database already knows, decision-maker and strategy notes, no street.
+    const res = await importInto(env, [{
+      company_name: 'Ozark Dental Group',
+      custom_1: 'DM: Dr. Ellis Brown',
+      custom_2: 'STRATEGY: on site 7am-4pm, actively shopping'
+    }]);
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+
+    assert.equal(body.merged, 1, 'must merge onto the existing account');
+    assert.equal(body.created, 0, 'must not create a second row');
+    assert.equal(nameCount(env, 'Ozark Dental Group'), 1);
+
+    // ...and the intelligence must actually land, rather than being parsed,
+    // validated, and dropped for want of a column to hold it.
+    const row = env.DB._raw.prepare(
+      `SELECT decision_maker, notes, street_1 FROM companies WHERE company_id='s1'`
+    ).get();
+    assert.equal(row.decision_maker, 'DM: Dr. Ellis Brown');
+    assert.match(row.notes, /actively shopping/);
+    assert.equal(row.street_1, '1200 E Sunshine St', 'a notes pass must not blank the address');
+  });
+
+  test(`[${shape} schema] address and name formatting variance still resolves to one account`, async () => {
+    const env = envFor(shape === 'fresh' ? buildFreshDb() : buildMigratedDb());
+
+    // "1200 E. Sunshine" vs "1200 E Sunshine St"; "The ... Group" vs "... Group".
+    const res = await importInto(env, [
+      { company_name: 'Ozark Dental Group', street_1: '1200 E. Sunshine' },
+      { company_name: 'The Ozark Dental Group, Inc.', street_1: '1200 East Sunshine Street' }
+    ]);
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.created, 0, JSON.stringify(body));
+    assert.equal(
+      env.DB._raw.prepare(`SELECT COUNT(*) n FROM companies WHERE company_id='s1'`).get().n,
+      1
+    );
+  });
+
+  test(`[${shape} schema] notes accumulate across passes and re-importing adds nothing`, async () => {
+    const env = envFor(shape === 'fresh' ? buildFreshDb() : buildMigratedDb());
+    const notesOf = () =>
+      env.DB._raw.prepare(`SELECT notes FROM companies WHERE company_id='s1'`).get().notes;
+
+    await importInto(env, [{ company_name: 'Ozark Dental Group', notes: 'First visit: gatekeeper' }]);
+    await importInto(env, [{ company_name: 'Ozark Dental Group', notes: 'Second visit: met the DM' }]);
+
+    const after = notesOf();
+    assert.match(after, /First visit/);
+    assert.match(after, /Second visit/, 'a later pass must not overwrite earlier field history');
+
+    // The same batch replayed (a retried offline queue) must be a no-op.
+    await importInto(env, [{ company_name: 'Ozark Dental Group', notes: 'First visit: gatekeeper' }]);
+    assert.equal(notesOf(), after, 'a replayed import must not duplicate note text');
+  });
+
+  test(`[${shape} schema] a second location is created, but an unresolvable name is reported`, async () => {
+    const env = envFor(shape === 'fresh' ? buildFreshDb() : buildMigratedDb());
+
+    // Same name, a street that disagrees with the known one: a real second
+    // site, not a duplicate. Merging these would delete one of two prospects.
+    const first = await importInto(env, [
+      { company_name: 'Ozark Dental Group', street_1: '4400 S National Ave' }
+    ]);
+    assert.equal((await first.json()).created, 1);
+    assert.equal(nameCount(env, 'Ozark Dental Group'), 2);
+
+    // Now a notes-only payload naming it cannot be assigned to either site.
+    // The right answer is to say so — not to guess, and not to mint a third.
+    const second = await importInto(env, [
+      { company_name: 'Ozark Dental Group', notes: 'Which one?' }
+    ]);
+    const body = await second.json();
+    assert.equal(body.created, 0);
+    assert.equal(body.merged, 0);
+    assert.equal(body.ambiguous.length, 1, JSON.stringify(body));
+    assert.equal(body.ambiguous[0].candidates.length, 2);
+    assert.equal(nameCount(env, 'Ozark Dental Group'), 2, 'must not create a third row');
+  });
+
+  test(`[${shape} schema] contacts attach to the resolved account, not to a fresh one`, async () => {
+    const env = envFor(shape === 'fresh' ? buildFreshDb() : buildMigratedDb());
+
+    // In the incident these hung off the duplicate that had just been minted,
+    // so 45 decision makers landed on rows the agent never sees.
+    await importInto(env, [{
+      company_name: 'Ozark Dental Group',
+      contacts: [{ first_name: 'Theresa', last_name: 'Bagwell', job_title: 'President' }]
+    }]);
+
+    const row = env.DB._raw.prepare(
+      `SELECT company_id FROM contacts WHERE last_name='Bagwell'`
+    ).get();
+    assert.equal(row.company_id, 's1');
+  });
+
+  test(`[${shape} schema] duplicates inside one batch collapse onto a single row`, async () => {
+    const env = envFor(shape === 'fresh' ? buildFreshDb() : buildMigratedDb());
+
+    const res = await importInto(env, [
+      { company_name: 'Sunshine Bakery', street_1: '77 W Walnut St', industry: 'Retail Trade' },
+      { company_name: 'Sunshine Bakery', street_1: '77 West Walnut', industry: 'Retail Trade' }
+    ]);
+    const body = await res.json();
+    assert.equal(body.created, 1, JSON.stringify(body));
+    assert.equal(body.merged, 1);
+    assert.equal(nameCount(env, 'Sunshine Bakery'), 1);
+  });
+
+  test(`[${shape} schema] a batch over the cap reports the overflow instead of dropping it`, async () => {
+    const env = envFor(shape === 'fresh' ? buildFreshDb() : buildMigratedDb());
+
+    // `industry` is supplied so no record needs an AI classification call.
+    const payload = Array.from({ length: LIMITS.importBatch + 3 }, (_, i) => ({
+      company_name: `Overflow Target ${i}`,
+      industry: 'Other Commercial'
+    }));
+    const res = await importInto(env, payload);
+    const body = await res.json();
+
+    assert.equal(body.received, LIMITS.importBatch + 3);
+    assert.equal(body.not_processed.length, 3, 'the overflow must be named, not silently dropped');
+    assert.equal(body.not_processed[0], `Overflow Target ${LIMITS.importBatch}`);
+  });
 }
 
 test('migration 0003 preserves column values and removes the corrupt orphan', () => {
@@ -354,11 +524,19 @@ test('migration 0003 preserves column values and removes the corrupt orphan', ()
 
 test('every service-worker precached module exists on disk', () => {
   const sw = fs.readFileSync(path.join(ROOT, 'public/sw.js'), 'utf8');
-  const listed = [...sw.matchAll(/'(\/app\/[\w.-]+\.js)'/g)].map((m) => m[1]);
+  const listed = [...sw.matchAll(/'(\/app\/[\w./-]+\.js)'/g)].map((m) => m[1]);
 
-  const onDisk = fs.readdirSync(path.join(ROOT, 'public/app'))
-    .filter((f) => f.endsWith('.js'))
-    .map((f) => `/app/${f}`);
+  // Recurse: /app/modules/*.js are statically imported by app.js exactly like
+  // the top-level modules, but a flat readdir would let a missing nested module
+  // pass this test while the PWA failed to boot offline.
+  const walk = (dir, prefix = '') => fs
+    .readdirSync(dir, { withFileTypes: true })
+    .flatMap((entry) => {
+      if (entry.isDirectory()) return walk(path.join(dir, entry.name), `${prefix}${entry.name}/`);
+      return entry.name.endsWith('.js') ? [`/app/${prefix}${entry.name}`] : [];
+    });
+
+  const onDisk = walk(path.join(ROOT, 'public/app'));
 
   // A module missing from CORE_ASSETS is not a partial outage: app.js imports
   // them statically, so one uncached module stops the whole PWA from booting

@@ -8,6 +8,173 @@
 
 ---
 
+## 2026-09-02 04:00 UTC (2026-09-01 23:00 CDT) — Field-Agent Best-Practice Pass: Surfacing Intel, Queue Reliability, Correctable Geocodes
+
+### Why
+Follow-on to the import identity fix below. Three things that session left open,
+each of which fails the agent rather than the code.
+
+### 1. The imported intelligence was invisible (the biggest gap)
+The previous session added `decision_maker`, `company_phone` and `notes`, and the
+importer populated all 63 targets. **Nothing in the UI read them**, and
+`GET /api/companies` did not even select them — so the agent's decision-maker names
+and strategy notes sat in D1 where he could never see them. Storing data no screen
+renders is the same as discarding it.
+
+- `GET /api/companies` now returns `decision_maker`, `company_phone`, `notes`.
+- New **Account Intel** block in the field view (`#accountIntel`), above the AI Next
+  Action callout: who to ask for, a **one-tap `tel:` dial**, and a collapsed
+  Strategy & History section. Green rather than gold so it reads as "what you already
+  know" beside the gold AI callout. Built with `textContent` only.
+- `telHref()` — regression-tested. The agent's list contains
+  `"417-868-8002 (Ext 1456)"`; naively stripping non-digits dials **41786880021456**,
+  a wrong number tapped one-handed on a doorstep. Extensions now ride as `;ext=`, a
+  second number in one field never concatenates, and the output is always
+  `tel:` + digits so nothing from the CRM reaches an `href` verbatim.
+- `relativeDay()` — the match hint gained **recency**: "1 previous touch · last touched
+  today". A count alone does not stop an agent walking back into a business he saw
+  this morning. Parses D1's zone-less `'YYYY-MM-DD HH:MM:SS'` as UTC; reading it as
+  local would misreport every evening Springfield touch by a day.
+- Fixed a pre-existing wart: the dossier shell was revealed by each section but never
+  hidden again, so moving from an enriched account to a bare one left an empty
+  "Pre-Call Dossier" heading that reads as a loading failure.
+
+### 2. The offline queue could strand a day's work — CLAUDE.md rule 12
+`syncQueue()` had three `break` statements: **any** transient failure halted the entire
+drain. One entry the server kept 500-ing stranded every visit behind it, permanently,
+with the agent seeing only a "12 Pending" badge and no way to act.
+
+- **Head-of-line blocking removed.** Each entry carries a persisted `attempts` counter.
+  Order is preserved for the first `MAX_ORDERED_ATTEMPTS` (4) tries, then the entry
+  steps aside so the rest of the day lands. **It is never discarded.** Ordering is only
+  actually required so an activity log does not outrun the `company_creation` it
+  references, so a deferred company creation blocks *its own* dependent logs
+  (`blockedCompanyIds`) and nothing else.
+- **Retry on a timer**, 15s → 5m backoff, not only on events. `online` is unreliable on
+  Android; a queue that failed once could sit untouched until the agent happened to log
+  again. Also syncs on `visibilitychange`, the most reliable "we have signal" signal on
+  a phone.
+- **The badge is now a control.** Tap (or Enter/Space) to force a push and get a real
+  answer: how many sent, what is stuck, and why. A stuck entry turns the badge red and
+  names itself in the tooltip. "A field visit is never lost" is only credible if the
+  agent can check.
+
+### 3. A wrong geocode could never be corrected
+`upsertCompany` had `lat = COALESCE(companies.lat, excluded.lat)` — existing always won,
+so a row geocoded to the wrong rooftop was unfixable through **any** import path; the
+agent had to edit D1 by hand. Now `COALESCE(excluded.lat, companies.lat)`: supplied
+coordinates win, an omitted value still preserves what we hold. Safe because
+`handleImport` only geocodes accounts that lack coordinates.
+
+### Verification
+- **144 tests pass** (was 141). New: `relativeDay` UTC parsing and future-stamp
+  rejection; `telHref` extension/multi-number/junk handling; and an href-safety property
+  test asserting output always matches `tel:+?digits(;ext=digits)?` for hostile input.
+- Verified in the browser against a seeded replica at mobile viewport (375x812): Account
+  Intel renders with DM, dial button and notes; `tel:4178688002;ext=1456` for the
+  extension case; the recency hint renders amber for a same-day touch; the panel hides
+  for an account with no intel; **zero console errors**.
+- `CACHE_NAME` bumped to `aflac-prospect-v7` (rule 10 — store.js, field.js, desktop.js,
+  index.html and app.css are all precached).
+
+### Note for the next session
+While patching, a shell heredoc collapsed a backslash and wrote a literal **0x08 byte**
+into a regex in `field.js`, silently breaking it (`\bext` became `<BS>ext`, which can
+never match). The whole tree was scanned and is clean. **Author patch scripts with the
+file-writing tool, not shell heredocs, whenever the content contains backslashes.**
+
+Windows also briefly locked `public/app/store.js` against all readers mid-edit (likely
+AV scanning a freshly written file); deleting and rewriting it cleared the lock.
+
+## 2026-09-02 03:00 UTC (2026-09-01 22:00 CDT) — Import Identity Resolution: Root-Cause Fix for the 63-Target Duplicate Incident
+
+### Incident
+Pushing the 63-target follow-up list through `POST /api/companies/import` twice
+(`ingest_leads.py`, then `enrich_leads.py`) created **91 duplicate company rows** and
+**silently discarded 26 targets**. Production reached 307 rows for 249 real accounts.
+
+### Root Cause — three independent defects, all in the import path
+1. **The dedupe guard required a street address to even attempt a match.**
+   `handleImport` read `else if (raw.company_name && raw.street_1)`. The enrichment pass
+   carried notes and no street, so no lookup ran at all, `normalizeCompany()` minted a
+   fresh `crypto.randomUUID()`, and `ON CONFLICT(company_id, agent_email)` could not fire
+   on an id that had never existed. **50 of 50 records duplicated — a 100% failure rate.**
+   Verified in production: every row written 01:49–01:51 UTC has `street_1 IS NULL`.
+2. **The fuzzy key was built from raw strings.** `normalizeKey` lowercased and stripped
+   punctuation — including its own `|` field separator — with no handling for street-type
+   abbreviations, a leading "The", legal suffixes, or diacritics. "2850 E Battlefield Rd"
+   and "2850 E. Battlefield" were two companies. So were "The Date Lady" and "Date Lady".
+   An existing row with `street_1 = ''` never entered the index at all.
+3. **`rawCompanies = body.companies.slice(0, 50)` truncated in silence.** 63 sent,
+   50 processed, `imported: 50` returned as success. **12 of the 13 dropped targets did
+   not exist anywhere in production.** A missing lead is worse than a duplicate one: a
+   duplicate is visible in the target list, a missing prospect never gets visited.
+
+Separately, `custom_1` (decision maker), `custom_2` (CRM strategy) and `company_phone`
+had no mapping in `normalizeCompany` and no column on `companies`. All 63 strategy
+narratives — the entire point of the list — were parsed, uploaded, validated and dropped.
+The 45 contacts the enrichment pass did create were attached to the **duplicate** rows.
+
+### Fix
+- **`src/lib/match.js` (new)** — `CompanyMatcher` resolves identity over tiers, strongest
+  evidence first: `company_id` → `account_number` → `d365_lead_id` → name+street →
+  name+zip → unique name. `normalizeName` folds diacritics, `&`/`and`, a leading "The" and
+  trailing legal suffixes; `normalizeStreet` folds street types, directionals and unit
+  designators, and returns `''` for placeholders like "Springfield Area" (no digit = not
+  an address). A name-only match is rejected when the payload's address **contradicts** a
+  candidate, so a chain's second location stays a separate prospect.
+  **Design rule: a false merge is worse than a duplicate.** Ties are reported, never guessed.
+- **`src/routes/companies.js`** — `handleImport` resolves identity before writing, keeps
+  the index live so intra-batch duplicates collapse, skips geocoding and AI classification
+  for accounts that already have them, and returns `created` / `merged` / `ambiguous` /
+  `not_processed` instead of a bare `imported`. The batch cap (`LIMITS.importBatch`, 250)
+  now **reports** its overflow. `POST /api/companies` got the same resolution — that door
+  previously had no duplicate check of any kind.
+- **`src/lib/db.js`** — `company_phone`, `decision_maker` and `notes` are mapped
+  (accepting `custom_1`/`custom_2` as aliases) and persisted. **`notes` accumulates** via
+  an `instr()`-guarded append, so a later pass adds to the account's history rather than
+  overwriting it, and a replayed batch appends nothing.
+- **`migrations/0004_company_intel.sql`** — the three columns. **Applied to production.**
+- **`sync_leads.py` (new)** — one maintained client replacing the two divergent scripts.
+  Sends canonical field names, sends **no client-side `company_id`**, splits decision-maker
+  lines into real first/last/title contacts, batches under the cap, and prints what the
+  server did. The **live `CF_Authorization` JWT that was hardcoded in both old scripts has
+  been removed**; the token now comes from `CF_ACCESS_TOKEN` in the environment.
+- **`.gitignore`** — `leads.md`, the parsed JSON, and `backups/` now excluded. They contain
+  named decision makers and direct phone numbers for real businesses.
+
+### Verification
+- **141 tests pass** (was 127). 14 new cases in `test/schema.test.js` run against real
+  SQLite in **both** the fresh and the migrated (production) schema shapes: the notes-only
+  merge, address/name variance, note accumulation and replay idempotency, second-location
+  creation vs. reported ambiguity, contacts landing on the resolved account, intra-batch
+  collapse, and reported batch overflow.
+- **Incident replayed against the real 216 pre-incident production rows and both real
+  payloads.** Enrichment pass — OLD: 0 matched, 50 duplicates created. NEW: 59 matched,
+  **0 created**. Targets dropped — OLD: 26. NEW: **0**.
+- **End-to-end on a production replica**: `sync_leads.py` run 1 → 50 merged, 13 created;
+  run 2 → **0 created, 63 merged**. Fully idempotent. All 63 accounts carry their notes,
+  45 carry a decision maker, 31 carry a phone number.
+
+### Outstanding — needs the agent's approval (staged in `backups/`)
+The production data repair was blocked by the sandbox and has **not** been run:
+1. `backups/merge_duplicates_2026-09-01.sql` — folds 56 duplicate rows into 50 survivors
+   (307 → 251). Children are repointed before any delete; rehearsed on a replica with
+   zero activity logs lost and no orphans. Survivor priority: field history, then D365
+   identity, then a real address, then the oldest row.
+2. Deploy the Worker (`npm run deploy`).
+3. `python sync_leads.py` to repopulate notes, decision makers and phones.
+4. `backups/cleanup_ghost_contacts_2026-09-01.sql` — **run last.** Removes the 42
+   malformed `job_title='Decision Maker'` contacts the broken run created; none hold a
+   phone or email, and the predicate never strands an account.
+
+Full backups of `companies`, `contacts` and `activity_logs` are in `backups/`
+(2026-09-01T2153Z), taken before the migration.
+
+**Two same-name groups are deliberately left for the agent to resolve** — Gateway Furniture
+and High Efficiency HVAC each have two real locations plus an addressless row. The matcher
+reports these as `ambiguous` rather than guessing.
+
 ## 2026-09-01 14:45 UTC (2026-09-01 09:45 CDT) — Radar Scan: Address Extraction & Target Account Offline Queue Preservation
 
 ### Session Goal
