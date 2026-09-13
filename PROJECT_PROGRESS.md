@@ -8,6 +8,47 @@
 
 ---
 
+## 2026-09-13 15:36 UTC (2026-09-13 10:36 CDT) — Native Cloudflare MCP Server Endpoint Implementation
+
+### Summary
+Built a native Model Context Protocol (MCP) server endpoint at `/api/mcp` into the existing Cloudflare Worker following standard `MCP 2026-07-28` (Stateless Streamable HTTP), enabling Edge AI agents (such as Google Gemini Spark) to directly query and update the D1 database.
+
+### Key Actions
+1. **Installed MCP SDK**: Installed `@cloudflare/mcp-server` (aliased to `@modelcontextprotocol/sdk@^1.30.0`).
+2. **Updated Local Configuration**: Added `MCP_SECRET_KEY = "local_dev_key"` to `wrangler.jsonc` under `vars`.
+3. **Built MCP Router (`src/routes/mcp.js`)**:
+   - Implemented bearer token authentication (`Authorization: Bearer <MCP_SECRET_KEY>`), returning 401 for missing/invalid keys.
+   - Configured `McpServer` and `WebStandardStreamableHTTPServerTransport`.
+   - Registered tool `update_lead_intel` to update `pipeline_stage` and append timestamped `notes` to D1 companies via fuzzy `LIKE %company_name%` queries.
+   - Handled zero match and multiple match conditions by returning explicit error strings for model refinement.
+4. **Wired & Tested (`src/index.js` & `test/mcp.test.js`)**:
+   - Mounted `mcpRouter` at `/api/mcp` and exempted `/api/mcp` from JWT authentication.
+   - Created `test/mcp.test.js` covering 401 enforcement, valid authentication, single-match updates, and 0 / multi-match error responses.
+   - Ran `npm test`: all 344 unit tests pass 100%.
+
+---
+
+## 2026-09-13 15:15 UTC (2026-09-13 10:15 CDT) — Golden Merge ETL & Remote Production Seed Deployment
+
+### Summary
+Unified fragmented CRM sources (D365 Baseline Open Leads, Springfield B2B Pipeline & Prospecting Master, and Gemini Audit Markdown notes) into a schema-compliant Golden Record SQL seed. Repaired the Cloudflare D1 migration tracker, executed a remote disaster recovery backup, and deployed 680 golden company records to remote Cloudflare D1 (`legacy-db`).
+
+### Key Actions
+1. **SRE Backup**: Created remote database backup `production_backup.sql` (1.1MB) via `wrangler d1 export`.
+2. **Migration Tracker Repair**: Generated and applied `fix_migrations.sql` tracking migrations `0001_initial.sql` through `0006_actionable_callbacks.sql`. Verified tracker reports 0 unapplied migrations.
+3. **Golden Merge ETL**:
+   - Developed `golden_merge.py` with entity deduplication (phone & token ratio fuzzy matching).
+   - Preserved all 183 D365 open leads with original GUIDs and checksums.
+   - Strictly set `street_1`, `lat`, `long`, `geohash` to `NULL` for all 52 Service Area Business (SAB) accounts.
+   - Routed 117 accounts matching Suppression / DNC lists to `status = 'DO_NOT_CONTACT'`.
+   - Injected dated interaction history from Markdown and Excel notes into company intelligence fields.
+   - Handled Excel typing edge cases (e.g. headcount ranges converted to datetimes).
+4. **Production Deployment & Verification**:
+   - Ingested `golden_seed.sql` in 14 batched transactions (50 statements per batch with foreign key pragmas and unique transaction nonces to avoid DO reset timeouts).
+   - Verified remote counts: 680 companies total, 117 DO_NOT_CONTACT, 52 SABs coordinate-free, 183 D365 leads preserved.
+
+---
+
 ## 2026-09-02 04:00 UTC (2026-09-01 23:00 CDT) — Field-Agent Best-Practice Pass: Surfacing Intel, Queue Reliability, Correctable Geocodes
 
 ### Why

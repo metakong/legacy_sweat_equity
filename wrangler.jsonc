@@ -2,6 +2,9 @@
   "name": "legacy-sweat-equity",
   "main": "src/index.js",
   "compatibility_date": "2026-07-20",
+  "vars": {
+    "MCP_SECRET_KEY": "local_dev_key"
+  },
   "d1_databases": [
     {
       "binding": "DB",

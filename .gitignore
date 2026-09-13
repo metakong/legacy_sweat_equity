@@ -35,9 +35,10 @@ seed-output.sql
 .replica.sqlite-*
 .local_r2/
 
-# OS Files
+# OS & Editor Files
 .DS_Store
 Thumbs.db
+.vscode/
 
 # Wrangler/D1 scratch output (probe SQL, --json dumps, deploy logs). These are
 # throwaway diagnostics that run against production; they are never artifacts.
@@ -45,6 +46,7 @@ Thumbs.db
 
 # Database backups + ad-hoc analysis dumps. Real prospect PII — never committed.
 backups/
+merge09132026/
 .tmp_analysis/
 
 # Field-intelligence source and its parsed output. Contains named decision
