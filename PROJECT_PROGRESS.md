@@ -8,6 +8,31 @@
 
 ---
 
+## 2026-09-13 16:28 UTC (2026-09-13 11:28 CDT) — Mock OAuth 2.0 Provider for Gemini Spark
+
+### Summary
+Added a dummy OAuth 2.0 authorization-code flow (`/api/oauth`) so Google Gemini
+Spark's Custom Connected Apps can complete the required handshake to reach the
+existing MCP endpoint. The `/token` endpoint issues the Worker's `MCP_SECRET_KEY`
+directly as the `access_token`, so the existing MCP bearer-token check works
+without modification.
+
+### Key Actions
+1. **Created `src/routes/oauth.js`** — `GET /authorize` (302 redirect with mock
+   code + state) and `POST /token` (validates `client_secret` against
+   `MCP_SECRET_KEY`, issues `{ access_token, token_type, expires_in }`).
+2. **Wired in `src/index.js`** — imported + mounted at `/api/oauth`; exempted
+   from JWT user auth middleware alongside `/api/mcp`.
+3. **Verified MCP auth** — `src/routes/mcp.js` already checks
+   `Authorization: Bearer <MCP_SECRET_KEY>`, perfectly aligned with the token
+   the OAuth flow issues.
+4. **Created `test/oauth.test.js`** — 7 tests covering 302 redirect with/without
+   state, missing `redirect_uri` → 400, invalid secret → 401, missing env → 401,
+   valid JSON body → 200, valid form-encoded body → 200.
+5. **All 351 tests pass** (`npm test`).
+
+---
+
 ## 2026-09-13 15:36 UTC (2026-09-13 10:36 CDT) — Native Cloudflare MCP Server Endpoint Implementation
 
 ### Summary

@@ -41,6 +41,7 @@ import radarRouter, { handleRadar } from './routes/radar.js';
 import voiceRouter, { handleVoiceDebrief } from './routes/voice.js';
 import leadsRouter, { handleLeads } from './routes/leads.js';
 import mcpRouter from './routes/mcp.js';
+import oauthRouter from './routes/oauth.js';
 import { classifyIndustry } from './lib/ai.js';
 
 const app = new Hono();
@@ -96,7 +97,7 @@ app.use('*', async (c, next) => {
 // ---------------------------------------------------------------------
 app.use('/api/*', async (c, next) => {
   const url = new URL(c.req.url);
-  if (url.pathname === '/api/health' || url.pathname.startsWith('/api/mcp') || c.req.method === 'OPTIONS') {
+  if (url.pathname === '/api/health' || url.pathname.startsWith('/api/mcp') || url.pathname.startsWith('/api/oauth') || c.req.method === 'OPTIONS') {
     return next();
   }
 
@@ -137,6 +138,7 @@ app.post('/api/voice-debrief', handleVoiceDebrief);
 app.route('/api/leads', leadsRouter);
 app.get('/api/leads', handleLeads);
 app.route('/api/mcp', mcpRouter);
+app.route('/api/oauth', oauthRouter);
 
 // /api/transcribe-and-log and /api/sync are part of the external contract and
 // live at the API root rather than under /api/activity.
