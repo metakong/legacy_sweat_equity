@@ -1461,6 +1461,109 @@ function initRadarScan() {
   });
 }
 
+// ---------------------------------------------------------------------
+// GEOFENCE PROXIMITY WATCH (Stream 1)
+// ---------------------------------------------------------------------
+
+let geofenceWatchId = null;
+let lastGeofenceCheckTime = 0;
+let geofenceEnabled = false;
+const GEOFENCE_THROTTLE_MS = 60000; // 60 seconds battery throttle
+const PROXIMITY_THRESHOLD_METERS = 100;
+
+export function haversineMeters(lat1, lon1, lat2, lon2) {
+  const toRad = (x) => (x * Math.PI) / 180;
+  const R = 6371000; // Earth radius in meters
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+export function evaluateGeofenceProximity(currentLat, currentLong, targetCompanies = state.companies) {
+  const banner = $('geofenceAlertBanner');
+  if (!banner || !currentLat || !currentLong) return null;
+
+  const todayStr = businessDate();
+  const eligible = (targetCompanies || []).filter((c) => {
+    if (!c || c.lat === null || c.long === null || c.lat === undefined || c.long === undefined) return false;
+    const isWarmOrHot = c.rating === 'Warm' || c.rating === 'Hot';
+    const isDueToday = c.next_action_date === todayStr || c.latest_next_action_date === todayStr;
+    return isWarmOrHot || isDueToday;
+  });
+
+  for (const comp of eligible) {
+    const dist = haversineMeters(currentLat, currentLong, comp.lat, comp.long);
+    if (dist <= PROXIMITY_THRESHOLD_METERS) {
+      banner.replaceChildren();
+      const textSpan = document.createElement('span');
+      textSpan.textContent = `📍 Nearby Prospect: ${comp.company_name} (${Math.round(dist)}m away). Tap to log visit.`;
+      banner.appendChild(textSpan);
+      banner.style.display = 'block';
+
+      banner.onclick = () => {
+        applyCompany(comp);
+        banner.style.display = 'none';
+      };
+
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        try { navigator.vibrate([200, 100, 200]); } catch { /* ignore */ }
+      }
+      return comp;
+    }
+  }
+
+  banner.style.display = 'none';
+  return null;
+}
+
+export function startGeofenceWatch() {
+  if (geofenceWatchId || typeof navigator === 'undefined' || !navigator.geolocation) return;
+  geofenceWatchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      const now = Date.now();
+      if (now - lastGeofenceCheckTime < GEOFENCE_THROTTLE_MS) return;
+      lastGeofenceCheckTime = now;
+      evaluateGeofenceProximity(pos.coords.latitude, pos.coords.longitude);
+    },
+    (err) => console.info('Geofence watch location warning:', err.message),
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+  );
+}
+
+export function stopGeofenceWatch() {
+  if (geofenceWatchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+    navigator.geolocation.clearWatch(geofenceWatchId);
+    geofenceWatchId = null;
+  }
+  const banner = $('geofenceAlertBanner');
+  if (banner) banner.style.display = 'none';
+}
+
+function initGeofenceWatch() {
+  const btn = $('btnGeofenceToggle');
+  if (!btn) return;
+
+  btn.addEventListener('click', () => {
+    geofenceEnabled = !geofenceEnabled;
+    if (geofenceEnabled) {
+      btn.classList.add('active');
+      btn.textContent = '📡 Geofence: On';
+      startGeofenceWatch();
+      showToast('Geofence Watch enabled (checking every 60s to save battery).', 'info');
+    } else {
+      btn.classList.remove('active');
+      btn.textContent = '📡 Geofence: Off';
+      stopGeofenceWatch();
+      showToast('Geofence Watch disabled.', 'info');
+    }
+  });
+}
+
 export function initFieldView() {
   initMap();
   initRadarScan();
@@ -1474,6 +1577,7 @@ export function initFieldView() {
   initSave();
   initVoiceResultListener();
   initBroadcastSyncListener();
+  initGeofenceWatch();
   updateScoreboard();
 
   window.addEventListener('viewactivated', (event) => {

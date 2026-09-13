@@ -50,7 +50,8 @@ const EXTRACTION = {
   next_action_date: '2026-09-18',
   confidence_score: 85,
   verification_status: 'PHONE_VERIFIED',
-  d365_counters: { phone_dials: 1, dm_contacts: 1, walk_ins: 0, appointments_set: 0 }
+  d365_counters: { phone_dials: 1, dm_contacts: 1, walk_ins: 0, appointments_set: 0 },
+  actions: []
 };
 
 function tempDbPath() {
@@ -229,7 +230,7 @@ test('extractVoiceIntelligence enforces the strict JSON contract through OpenRou
 
   assert.equal(calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(calls[0].init.headers.Authorization, 'Bearer sk-or');
-  assert.equal(calls[0].body.model, 'anthropic/claude-3.5-sonnet');
+  assert.equal(calls[0].body.model, 'z-ai/glm-5.3-flash');
   assert.deepEqual(calls[0].body.response_format, { type: 'json_object' });
   assert.equal(calls[0].body.temperature, 0);
 

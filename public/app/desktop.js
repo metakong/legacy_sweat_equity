@@ -1481,8 +1481,76 @@ export function initDesktopViews() {
   onViewOpen('data-management', loadDataManagement);
   onViewOpen('tier1', loadTier1);
   onViewOpen('tier23', loadExports);
+  onViewOpen('pipeline', loadPipelineForecast);
   // The debrief is a paid model call, so it runs on request rather than on
   // first open like the others.
+}
+
+/** Fetch and render backend AP forecast metrics & pipeline velocity */
+export async function loadPipelineForecast() {
+  const panel = $('pipelineForecastPanel');
+  if (!panel) return;
+  try {
+    const data = await apiFetch('/api/pipeline/forecast');
+    if (!data || !data.success) return;
+
+    const evFormatted = `$${Number(data.total_weighted_ev || 0).toLocaleString('en-US')}`;
+    const apFormatted = `$${Number(data.total_unweighted_ap || 0).toLocaleString('en-US')}`;
+
+    const velText = (data.velocity || []).length > 0
+      ? data.velocity.map((v) => `${v.stage}: ${v.avg_days}d`).join(' • ')
+      : 'No historical stage transitions recorded';
+
+    const winText = (data.industry_win_rates || []).length > 0
+      ? data.industry_win_rates.slice(0, 4).map((w) => `${w.industry}: ${w.win_rate}%`).join(' • ')
+      : 'No industry conversion data available';
+
+    panel.replaceChildren(
+      el('div', {
+        className: 'panel-head',
+        children: [
+          el('h3', { text: '📈 Pipeline Intelligence & AP Forecasting' }),
+          el('span', { className: 'badge', text: `EV AP: ${evFormatted} (Unweighted: ${apFormatted})` })
+        ]
+      }),
+      el('div', {
+        className: 'telemetry-grid',
+        style: 'margin-top: 0.75rem;',
+        children: [
+          el('div', {
+            className: 'telemetry-card',
+            children: [
+              el('span', { className: 'telemetry-val', text: evFormatted }),
+              el('span', { className: 'telemetry-label', text: 'Weighted EV AP' })
+            ]
+          }),
+          el('div', {
+            className: 'telemetry-card',
+            children: [
+              el('span', { className: 'telemetry-val', text: apFormatted }),
+              el('span', { className: 'telemetry-label', text: 'Gross Unweighted AP' })
+            ]
+          }),
+          el('div', {
+            className: 'telemetry-card',
+            children: [
+              el('span', { className: 'telemetry-val', style: 'font-size: 0.9rem; font-weight: 600;', text: velText }),
+              el('span', { className: 'telemetry-label', text: 'Avg Days per Stage' })
+            ]
+          }),
+          el('div', {
+            className: 'telemetry-card',
+            children: [
+              el('span', { className: 'telemetry-val', style: 'font-size: 0.9rem; font-weight: 600;', text: winText }),
+              el('span', { className: 'telemetry-label', text: 'Top Industry Win-Rates' })
+            ]
+          })
+        ]
+      })
+    );
+  } catch (err) {
+    console.warn('Failed to load pipeline forecast:', err.message);
+  }
 }
 
 /** Re-fetch whatever the agent is currently looking at after a queue drain. */
@@ -1493,6 +1561,7 @@ export function refreshActiveDesktopView() {
   if (active.id === 'view-tier1') loadTier1();
   if (active.id === 'view-tier23') loadExports();
   if (active.id === 'view-route') loadTargets();
+  if (active.id === 'view-pipeline') loadPipelineForecast();
 }
 
 // Referenced by the Tier 2 column definition; re-exported so a future tab can

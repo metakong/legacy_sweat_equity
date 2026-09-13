@@ -30,10 +30,10 @@ const TAVILY_URL = 'https://api.tavily.com/search';
 // Verified against https://openrouter.ai/api/v1/models on 2026-08-29.
 export const DEFAULT_MODELS = {
   transcribe: 'whisper-large-v3-turbo',
-  simple: 'deepseek/deepseek-v4-flash',
-  complex: 'meta-llama/llama-3.3-70b-instruct',
-  structure: 'anthropic/claude-haiku-4.5',
-  enrich: 'meta-llama/llama-3.3-70b-instruct'
+  simple: 'z-ai/glm-5.3-flash',
+  complex: 'qwen/qwen-3.8-27b',
+  structure: 'z-ai/glm-5.3-flash',
+  enrich: 'qwen/qwen-3.8-27b'
 };
 
 /** Thrown for provider failures so routes can map them to a clean 502. */
@@ -118,7 +118,7 @@ export async function transcribeAudio(audioBlobOrBuffer, options = {}) {
     throw new ProviderError('groq', 503, 'GROQ_API_KEY is not configured');
   }
 
-  const doFetch = options.fetchImpl || fetch;
+  const doFetch = options.fetchImpl || options.env?.fetchImpl || env.fetchImpl || fetch;
   const filename = options.filename || `journal.${audioExtensionFor(audio.type)}`;
 
   const form = new FormData();
@@ -132,10 +132,7 @@ export async function transcribeAudio(audioBlobOrBuffer, options = {}) {
   // that matter most in this workflow.
   form.append(
     'prompt',
-    'Aflac supplemental insurance field notes. Terms: decision maker, gatekeeper, '
-    + 'HR director, office manager, payroll deduction, Section 125, cafeteria plan, '
-    + 'annualized premium, AP, enrollment, open enrollment, presentation, W-2, '
-    + 'accident, critical illness, hospital indemnity, short-term disability.'
+    'Aflac supplemental insurance field notes. Springfield MO corridors: Glenstone, Battlefield, Sunshine, Kearney, Parkview. Terms: decision maker, gatekeeper, HR director, office manager, Level-Funded Medical, Dental, Vision, Group Term Life, Section 125, cafeteria plan, annualized premium, AP, enrollment, open enrollment, presentation, W-2, accident, critical illness, hospital indemnity, short-term disability.'
   );
 
   const res = await doFetch(GROQ_TRANSCRIBE_URL, {
@@ -483,7 +480,7 @@ export async function classifyIndustry(companyName, env) {
   }
 
   const payload = {
-    models: ['z-ai/glm-5.3-flash', 'deepseek/deepseek-v4-flash'],
+    models: ['z-ai/glm-5.3-flash', 'deepseek/deepseek-v4-flash-0731'],
     messages: [
       {
         role: 'system',
@@ -633,7 +630,8 @@ Return ONLY a JSON object with exactly these keys:
   "next_action_date": "YYYY-MM-DD" or null,
   "confidence_score": integer 0-100,
   "verification_status": one of ["UNVERIFIED","PHONE_VERIFIED","FIELD_VERIFIED","DISQUALIFIED"],
-  "d365_counters": { "phone_dials": integer, "dm_contacts": integer, "walk_ins": integer, "appointments_set": integer }
+  "d365_counters": { "phone_dials": integer, "dm_contacts": integer, "walk_ins": integer, "appointments_set": integer },
+  "actions": optional array of action objects: [ { "type": "UPDATE_STAGE", "to_stage": string }, { "type": "SCHEDULE_CALLBACK", "date": "YYYY-MM-DD", "text": string }, { "type": "ADD_NOTE", "text": string } ]
 }
 
 Rules:
@@ -643,6 +641,7 @@ Rules:
 - verification_status is PHONE_VERIFIED only when a decision maker confirmed their own details on a call, FIELD_VERIFIED only when confirmed face to face, and DISQUALIFIED only when the business cannot buy.
 - confidence_score bands: 30-40 raw unverified import, 50-70 registry match, 80-100 decision maker confirmed on this contact.
 - d365_counters describe THIS interaction only: phone_dials 1 for a placed call, walk_ins 1 for a physical stop, dm_contacts 1 only if a decision maker was reached, appointments_set 1 only if a presentation was scheduled. Use 0 when unsure.
+- actions is optional. If the user explicitly requested to update pipeline stage, schedule a callback, or add notes in their spoken debrief, emit an array of corresponding action items.
 - CRITICAL B2B COMPLIANCE: actively redact and ignore any mention of specific medical conditions, health data, or individual employee names other than the primary B2B decision maker. Replace any such instance with [REDACTED - PHI].
 - Never include commentary, markdown, or code fences. JSON only.`;
 
@@ -675,7 +674,7 @@ function asVoiceCounter(value) {
 }
 
 /** Pinned but overridable, so a model retirement is a config change. */
-export const VOICE_MODEL_DEFAULT = 'anthropic/claude-3.5-sonnet';
+export const VOICE_MODEL_DEFAULT = 'z-ai/glm-5.3-flash';
 
 /**
  * Coerce the model's JSON into the exact contract, or throw.
@@ -730,6 +729,27 @@ function normalizeVoiceExtraction(raw) {
   const d365Counters = {};
   for (const key of VOICE_COUNTER_KEYS) d365Counters[key] = asVoiceCounter(rawCounters[key]);
 
+  const actions = [];
+  if (Array.isArray(raw.actions)) {
+    for (const act of raw.actions) {
+      if (!act || typeof act !== 'object') continue;
+      if (act.type === 'UPDATE_STAGE' && typeof act.to_stage === 'string') {
+        actions.push({ type: 'UPDATE_STAGE', to_stage: act.to_stage.trim() });
+      } else if (act.type === 'SCHEDULE_CALLBACK') {
+        actions.push({
+          type: 'SCHEDULE_CALLBACK',
+          date: asIsoDate(act.date),
+          text: asVoiceText(act.text, 500)
+        });
+      } else if (act.type === 'ADD_NOTE' && act.text) {
+        actions.push({
+          type: 'ADD_NOTE',
+          text: asVoiceText(act.text, 2000)
+        });
+      }
+    }
+  }
+
   return {
     disposition,
     contact_made: contactMade,
@@ -744,7 +764,8 @@ function normalizeVoiceExtraction(raw) {
     next_action_date: asIsoDate(raw.next_action_date),
     confidence_score: confidence,
     verification_status: verification,
-    d365_counters: d365Counters
+    d365_counters: d365Counters,
+    actions
   };
 }
 
@@ -781,7 +802,8 @@ export function fallbackVoiceIntelligence(transcript, context = {}) {
       dm_contacts: 0,
       walk_ins: mode === 'FIELD' ? 1 : 0,
       appointments_set: 0
-    }
+    },
+    actions: []
   };
 }
 

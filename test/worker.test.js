@@ -1801,3 +1801,124 @@ test('POST /api/admin/reclassify-industries enforces keyset pagination and filte
     } catch (_) {}
   }
 });
+
+test('Stream 3: voice extraction normalizes composite actions and executes D1 mutations', async () => {
+  const tempDb = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aflac-voice-actions-')), 'test.sqlite');
+  const d1 = createD1(tempDb);
+
+  try {
+    // Insert test company
+    d1._raw.prepare(`
+      INSERT INTO companies (company_id, agent_email, company_name, pipeline_stage, notes)
+      VALUES (?, ?, ?, ?, ?)
+    `).run('comp_act_1', 'sean_deardorff@us.aflac.com', 'Acme Corp', 'PROSPECT', 'Initial notes.');
+
+    const mockExtracted = {
+      disposition: 'DM_TOUCH',
+      contact_made: true,
+      summary_notes: 'Spoke with DM, presentation scheduled.',
+      confidence_score: 85,
+      verification_status: 'PHONE_VERIFIED',
+      d365_counters: { phone_dials: 1, dm_contacts: 1, walk_ins: 0, appointments_set: 1 },
+      actions: [
+        { type: 'UPDATE_STAGE', to_stage: 'QUALIFIED' },
+        { type: 'SCHEDULE_CALLBACK', date: '2026-09-20', text: 'Follow up on Section 125 flyer' },
+        { type: 'ADD_NOTE', text: 'Decision maker requested quote.' }
+      ]
+    };
+
+    const form = new FormData();
+    const audioBlob = new Blob(['mock-audio'], { type: 'audio/webm' });
+    form.append('audio', audioBlob, 'test.webm');
+    form.append('company_id', 'comp_act_1');
+
+    const env = {
+      DB: d1,
+      GROQ_API_KEY: 'mock-groq-key',
+      OPENROUTER_API_KEY: 'mock-openrouter-key',
+      VOICE_INTELLIGENCE_MOCK: mockExtracted,
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({ text: 'Spoke with Sarah at Acme Corp.' })
+      })
+    };
+
+    const res = await app.request('/api/voice-debrief', {
+      method: 'POST',
+      body: form
+    }, env);
+
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.success, true);
+    assert.equal(json.extracted.actions.length, 3);
+
+    // Verify company state updated
+    const updatedComp = d1._raw.prepare('SELECT pipeline_stage, next_action_date, next_action, notes FROM companies WHERE company_id = ?').get('comp_act_1');
+    assert.equal(updatedComp.pipeline_stage, 'QUALIFIED');
+    assert.equal(updatedComp.next_action_date, '2026-09-20');
+    assert.equal(updatedComp.next_action, 'Follow up on Section 125 flyer');
+    assert.ok(updatedComp.notes.includes('Decision maker requested quote.'));
+
+    // Verify audit event tagged with reason
+    const event = d1._raw.prepare('SELECT * FROM pipeline_events WHERE company_id = ?').get('comp_act_1');
+    assert.equal(event.to_stage, 'QUALIFIED');
+    assert.equal(event.reason, 'Triggered via Agentic Voice Command');
+  } finally {
+    try { fs.rmSync(path.dirname(tempDb), { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+test('Stream 2: GET /api/pipeline/forecast computes velocity, win rates, and weighted EV with baseline confidence', async () => {
+  const tempDb = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aflac-forecast-')), 'test.sqlite');
+  const d1 = createD1(tempDb);
+
+  try {
+    // Seed companies with different stages, industries, employees, and confidence scores
+    const stmt = d1._raw.prepare(`
+      INSERT INTO companies (company_id, agent_email, company_name, pipeline_stage, industry, estimated_w2_count, forecast_ap, forecast_confidence, confidence_score)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run('f1', 'sean_deardorff@us.aflac.com', 'Tech Corp', 'QUALIFIED', 'Professional & Tech Services', 20, 5000, 80, 80);
+    stmt.run('f2', 'sean_deardorff@us.aflac.com', 'Build Co', 'PROPOSAL', 'Construction & Trades', 10, null, null, 30); // uses baseline confidence 30 and 10*250 = 2500 AP
+    stmt.run('f3', 'sean_deardorff@us.aflac.com', 'Won Shop', 'CLOSED_WON', 'Construction & Trades', 5, 2000, 100, 100);
+
+    // Seed pipeline events for velocity calculation
+    const evtStmt = d1._raw.prepare(`
+      INSERT INTO pipeline_events (event_id, company_id, from_stage, to_stage, changed_at, agent_email)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    evtStmt.run('e1', 'f1', 'PROSPECT', 'ENGAGED', '2026-09-01 10:00:00', 'sean_deardorff@us.aflac.com');
+    evtStmt.run('e2', 'f1', 'ENGAGED', 'QUALIFIED', '2026-09-05 10:00:00', 'sean_deardorff@us.aflac.com'); // 4 days
+
+    const res = await app.request('/api/pipeline/forecast', {
+      method: 'GET'
+    }, { DB: d1 });
+
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.success, true);
+
+    // Velocity assertions
+    assert.ok(Array.isArray(json.velocity));
+    const engagedVel = json.velocity.find(v => v.stage === 'ENGAGED');
+    assert.equal(engagedVel.avg_days, 4);
+
+    // Industry win-rates assertions
+    assert.ok(Array.isArray(json.industry_win_rates));
+    const constWin = json.industry_win_rates.find(w => w.industry === 'Construction & Trades');
+    assert.equal(constWin.total_count, 2);
+    assert.equal(constWin.won_count, 1);
+    assert.equal(constWin.win_rate, 50);
+
+    // Forecast EV assertions
+    // f1: 5000 * 0.8 = 4000
+    // f2: 2500 * 0.3 (default baseline confidence) = 750
+    // f3: 2000 * 1.0 = 2000
+    // Total weighted EV = 4000 + 750 + 2000 = 6750
+    assert.equal(json.total_weighted_ev, 6750);
+    assert.equal(json.total_unweighted_ap, 9500);
+  } finally {
+    try { fs.rmSync(path.dirname(tempDb), { recursive: true, force: true }); } catch (_) {}
+  }
+});

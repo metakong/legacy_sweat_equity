@@ -43,11 +43,11 @@ export function getRecommendedProducts(industry) {
 
 function buildEnrichSystemPrompt(recommendedProducts = [], { pipelineStage = 'PROSPECT', latestDisposition = 'None', touchCount = 0 } = {}) {
   const prodStr = recommendedProducts.length > 0 ? recommendedProducts.join(', ') : 'Accident, Short-Term Disability, Hospital Indemnity';
-  return `You brief an independent Aflac insurance agent immediately before a cold B2B walk-in.
+  return `You brief an independent Aflac insurance agent immediately before a cold B2B walk-in in Springfield, Missouri.
 
 Context: This prospect is currently in stage ${pipelineStage}. Previous disposition: ${latestDisposition}. Total touches: ${touchCount}.
 
-You read raw web search results and return exactly three markdown bullets, in this order and with these exact labels:
+You read raw web search results and return exactly three markdown bullets, explicitly cross-referencing regional Springfield, MO context (such as local commercial corridors like Glenstone, Battlefield, Sunshine, Kearney, and local industrial or medical parks) when evaluating search results. Output in this order and with these exact labels:
 
 - **Executives:** named decision makers and their titles (owner, president, HR director, office manager). Prefer the person who would sign off on a voluntary-benefits offering.
 - **Headcount:** employee count or a tight range, plus the basis for it. Aflac needs 3+ W-2 employees, so state whether that bar is clearly met.

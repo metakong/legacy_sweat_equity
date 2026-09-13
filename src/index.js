@@ -200,25 +200,31 @@ app.post('/api/admin/reclassify-industries', async (c) => {
   const BATCH_SIZE = 5;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const chunk = rows.slice(i, i + BATCH_SIZE);
-    await Promise.all(chunk.map(async (row) => {
+    const chunkResults = await Promise.all(chunk.map(async (row) => {
       try {
         const category = await classifyIndustry(row.company_name, c.env);
         if (category && category !== row.industry) {
           await c.env.DB.prepare(
             'UPDATE companies SET industry = ? WHERE company_id = ?'
           ).bind(category, row.company_id).run();
-          updated += 1;
-          classifications.push({
+          return {
             company_id: row.company_id,
             company_name: row.company_name,
             from: row.industry,
             category
-          });
+          };
         }
       } catch (err) {
         console.warn(`Reclassify error for ${row.company_name}:`, err.message);
       }
+      return null;
     }));
+    for (const resItem of chunkResults) {
+      if (resItem) {
+        updated += 1;
+        classifications.push(resItem);
+      }
+    }
   }
 
   const has_more = rows.length === limit;

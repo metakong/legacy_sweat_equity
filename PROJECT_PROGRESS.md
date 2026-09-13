@@ -8,6 +8,27 @@
 
 ---
 
+## 2026-09-13 22:02 UTC (2026-09-13 17:02 CDT) — Advanced Ecosystem Upgrade (Streams 1, 2, & 3)
+
+### Summary
+Implemented three major operational streams across the **Aflac Field Prospecting Assistant** codebase with full unit test coverage (362 tests passing):
+1. **Stream 3 (Agentic Voice Command Chaining)**: Voice debrief parser (`z-ai/glm-5.3-flash`) updated to extract multi-intent `actions` (`UPDATE_STAGE`, `SCHEDULE_CALLBACK`, `ADD_NOTE`) and execute D1 mutations atomically (`pipeline_events` audit insert tagged with `reason: 'Triggered via Agentic Voice Command'`).
+2. **Stream 2 (Pipeline Velocity & AP Forecasting)**: Added `GET /api/pipeline/forecast` calculating average stage velocity, industry conversion win-rates, and weighted EV AP forecasting (using a default baseline confidence score of `30` if unrated). Rendered metrics panel on the desktop command center dashboard (`public/app/desktop.js`).
+3. **Stream 1 (Geofence Proximity Triggers)**: Mobile PWA geolocation watcher (`navigator.geolocation.watchPosition`), throttled to 60-second checks with a UI toggle (`📡 Geofence: On/Off`) to preserve field battery life. Evaluates Haversine distances against active `Warm`/`Hot` or due-today accounts, firing non-blocking alert banners and device vibration (`navigator.vibrate([200, 100, 200])`).
+
+### Key Actions & Changes
+- `src/lib/ai.js`: Updated `VOICE_SYSTEM_PROMPT` schema contract and `normalizeVoiceExtraction` to process `actions`. Allowed `env.fetchImpl` fallback in `transcribeAudio`.
+- `src/routes/voice.js`: Integrated `actions` execution into `handleVoiceDebrief` atomic D1 `batch()`.
+- `src/routes/pipeline.js`: Created `GET /api/pipeline/forecast` endpoint returning velocity, industry win-rates, and weighted EV.
+- `public/app/desktop.js` & `public/app/index.html`: Added `loadPipelineForecast()` and HTML panel for desktop forecasting.
+- `public/app/field.js` & `public/app/index.html`: Implemented `initGeofenceWatch()`, Haversine proximity evaluation, toggle button, and alert banner.
+- `test/worker.test.js` & `test/voice.test.js`: Added unit tests covering composite voice actions, forecasting calculation logic, and baseline confidence handling.
+
+### Verification
+- Executed `npm test`: 362 test cases passed with 0 failures (`100% pass rate`).
+
+---
+
 ## 2026-09-13 21:30 UTC (2026-09-13 16:30 CDT) — Codebase Hardening: Zero Trust Auth, OAuth Constant-Time Validation, Multi-Tenant SQL Isolation, Unified Sync Architecture & Keyset Pagination
 
 ### Summary

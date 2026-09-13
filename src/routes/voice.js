@@ -21,7 +21,7 @@
  */
 
 import { Hono } from 'hono';
-import { LIMITS, asId, cleanCapped } from '../lib/validate.js';
+import { LIMITS, asId, cleanCapped, PIPELINE_STAGES, matchEnum } from '../lib/validate.js';
 import {
   ProviderError,
   transcribeAudio,
@@ -268,6 +268,40 @@ export async function handleVoiceDebrief(c) {
       counters.walk_ins,
       counters.appointments_set
     ));
+
+    // Process agentic multi-intent actions atomically if linked to a company
+    if (companyId && Array.isArray(extracted.actions) && extracted.actions.length > 0) {
+      for (const act of extracted.actions) {
+        if (act.type === 'UPDATE_STAGE' && act.to_stage) {
+          const canonicalStage = matchEnum(act.to_stage, PIPELINE_STAGES);
+          if (canonicalStage) {
+            statements.push(c.env.DB.prepare(`
+              UPDATE companies SET pipeline_stage = ?, stage_entered_at = datetime('now') WHERE company_id = ? AND agent_email = ?
+            `).bind(canonicalStage, companyId, userEmail));
+
+            statements.push(c.env.DB.prepare(`
+              INSERT INTO pipeline_events (event_id, company_id, from_stage, to_stage, changed_at, trigger_log_id, reason, agent_email)
+              VALUES (?, ?, (SELECT pipeline_stage FROM companies WHERE company_id = ? AND agent_email = ?), ?, datetime('now'), NULL, 'Triggered via Agentic Voice Command', ?)
+            `).bind(crypto.randomUUID(), companyId, companyId, userEmail, canonicalStage, userEmail));
+          }
+        } else if (act.type === 'SCHEDULE_CALLBACK') {
+          if (act.date || act.text) {
+            statements.push(c.env.DB.prepare(`
+              UPDATE companies SET
+                next_action_date = COALESCE(?, next_action_date),
+                next_action = COALESCE(?, next_action)
+              WHERE company_id = ? AND agent_email = ?
+            `).bind(act.date || null, act.text || null, companyId, userEmail));
+          }
+        } else if (act.type === 'ADD_NOTE' && act.text) {
+          statements.push(c.env.DB.prepare(`
+            UPDATE companies SET
+              notes = CASE WHEN notes IS NULL OR notes = '' THEN ? ELSE notes || CHAR(10) || ? END
+            WHERE company_id = ? AND agent_email = ?
+          `).bind(act.text, act.text, companyId, userEmail));
+        }
+      }
+    }
 
     const results = await c.env.DB.batch(statements);
     activityId = results?.[activityStatementIndex]?.meta?.last_row_id ?? null;

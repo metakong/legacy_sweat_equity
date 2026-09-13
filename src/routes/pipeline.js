@@ -214,4 +214,76 @@ pipeline.get('/events/:companyId', async (c) => {
   return c.json({ success: true, events: results || [] });
 });
 
+/**
+ * GET /api/pipeline/forecast — pipeline velocity, industry win-rates, & weighted EV AP forecast.
+ */
+pipeline.get('/forecast', async (c) => {
+  const userEmail = c.get('userEmail');
+  if (!userEmail) return c.json({ error: 'Unauthorized' }, 401);
+
+  // 1. Velocity by stage
+  const velocitySql = `
+    WITH transitions AS (
+      SELECT
+        company_id,
+        from_stage,
+        to_stage,
+        changed_at,
+        LAG(changed_at) OVER (PARTITION BY company_id ORDER BY changed_at ASC) AS prev_changed_at
+      FROM pipeline_events
+      WHERE agent_email = ?
+    )
+    SELECT
+      from_stage AS stage,
+      ROUND(AVG(julianday(changed_at) - julianday(prev_changed_at)), 1) AS avg_days
+    FROM transitions
+    WHERE prev_changed_at IS NOT NULL AND from_stage IS NOT NULL
+    GROUP BY from_stage
+  `;
+  const { results: velocityRows } = await c.env.DB.prepare(velocitySql).bind(userEmail).all().catch(() => ({ results: [] }));
+
+  // 2. Win-rates by industry
+  const winRateSql = `
+    SELECT
+      COALESCE(industry, 'Other Commercial') AS industry,
+      COUNT(CASE WHEN pipeline_stage = 'CLOSED_WON' THEN 1 END) AS won_count,
+      COUNT(*) AS total_count,
+      ROUND(CAST(COUNT(CASE WHEN pipeline_stage = 'CLOSED_WON' THEN 1 END) AS REAL) / COUNT(*) * 100, 1) AS win_rate
+    FROM companies
+    WHERE agent_email = ?
+    GROUP BY COALESCE(industry, 'Other Commercial')
+    HAVING COUNT(*) > 0
+    ORDER BY win_rate DESC, total_count DESC
+  `;
+  const { results: winRateRows } = await c.env.DB.prepare(winRateSql).bind(userEmail).all().catch(() => ({ results: [] }));
+
+  // 3. Weighted EV AP forecast by active stage (default baseline confidence = 30)
+  const evSql = `
+    SELECT
+      pipeline_stage,
+      COUNT(*) AS account_count,
+      ROUND(SUM(COALESCE(forecast_ap, COALESCE(estimated_w2_count, employees, 0) * 250, 0)), 2) AS unweighted_ap,
+      ROUND(SUM(
+        COALESCE(forecast_ap, COALESCE(estimated_w2_count, employees, 0) * 250, 0) *
+        (COALESCE(forecast_confidence, confidence_score, 30) / 100.0)
+      ), 2) AS weighted_ev_ap
+    FROM companies
+    WHERE agent_email = ?
+    GROUP BY pipeline_stage
+  `;
+  const { results: evRows } = await c.env.DB.prepare(evSql).bind(userEmail).all().catch(() => ({ results: [] }));
+
+  const totalWeightedEv = (evRows || []).reduce((acc, row) => acc + Number(row.weighted_ev_ap || 0), 0);
+  const totalUnweightedAp = (evRows || []).reduce((acc, row) => acc + Number(row.unweighted_ap || 0), 0);
+
+  return c.json({
+    success: true,
+    velocity: velocityRows || [],
+    industry_win_rates: winRateRows || [],
+    stage_forecast: evRows || [],
+    total_weighted_ev: Math.round(totalWeightedEv * 100) / 100,
+    total_unweighted_ap: Math.round(totalUnweightedAp * 100) / 100
+  });
+});
+
 export default pipeline;

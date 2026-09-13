@@ -140,7 +140,10 @@
           <button class="filter-chip active" type="button" data-filter="all_active" id="chip-all-active">All Active</button>
           <button class="filter-chip" type="button" data-filter="untouched" id="chip-untouched">Untouched</button>
           <button class="filter-chip" type="button" data-filter="follow_ups" id="chip-follow-ups">Follow-Ups</button>
+          <button class="filter-chip" type="button" id="btnGeofenceToggle" title="Toggle background geofence watch (60s check) to save battery">📡 Geofence: Off</button>
         </div>
+
+        <div id="geofenceAlertBanner" class="geofence-alert-banner" style="display:none; background: var(--accent-gold, #f59e0b); color: #000; padding: 10px 16px; font-weight: 600; border-radius: 8px; margin-bottom: 8px; cursor: pointer; text-align: center;" aria-live="assertive"></div>
 
         <div class="map-wrapper" style="position: relative;">
           <div id="map" role="region" aria-label="Map showing your current position and nearby prospects"></div>
@@ -611,6 +614,14 @@
 
           <!-- Desktop Kanban View -->
           <div class="pipeline-desktop-view">
+            <div class="panel forecast-panel" id="pipelineForecastPanel" style="margin-bottom: 1rem;">
+              <div class="panel-head">
+                <h3>📈 Pipeline Intelligence &amp; AP Forecasting</h3>
+                <span class="badge" id="forecastEvBadge">EV AP: $0</span>
+              </div>
+              <p class="field-hint">Loading pipeline velocity and weighted EV forecasting metrics…</p>
+            </div>
+
             <div class="panel">
               <div class="panel-head">
                 <h2>📊 B2B Deal-Flow Pipeline</h2>
