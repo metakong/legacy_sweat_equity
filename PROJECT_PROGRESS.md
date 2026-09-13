@@ -8,6 +8,25 @@
 
 ---
 
+## 2026-09-13 17:21 UTC (2026-09-13 12:21 CDT) — Production Deployment & Edge Verification (MCP & RFC 8414 OAuth)
+
+### Summary
+Deployed updated Cloudflare Worker containing the native Model Context Protocol (MCP) server endpoint and RFC 8414 / RFC 9728 / RFC 7591 OAuth discovery & DCR routes to production (`legacysweatequity.com`). Executed live edge smoke tests confirming public discovery and token issuance.
+
+### Key Actions
+1. **Local Test Suite Verification**:
+   - Ran `npm test`: all 353 test cases passed with zero failures across `test/oauth.test.js`, `test/mcp.test.js`, and core modules.
+2. **Production Deployment**:
+   - Verified `.dev.vars` contains local dev secrets and `wrangler.jsonc` has no plaintext secret overrides.
+   - Deployed to Cloudflare edge (`Version ID: d3c2ae08-fedf-44a0-b332-94582d338da0`).
+3. **Live Edge Smoke Tests**:
+   - `GET https://legacysweatequity.com/.well-known/oauth-authorization-server` -> `200 OK` (RFC 8414 metadata).
+   - `GET https://legacysweatequity.com/.well-known/oauth-protected-resource` -> `200 OK` (RFC 9728 metadata).
+   - `POST https://legacysweatequity.com/api/oauth/token` -> `200 OK` returning Bearer access token matching the production `MCP_SECRET_KEY`.
+   - `POST https://legacysweatequity.com/api/mcp` (`tools/list`) with Bearer token -> `200 OK` returning `update_lead_intel` tool definition via standard MCP SSE transport.
+
+---
+
 ## 2026-09-13 16:54 UTC (2026-09-13 11:54 CDT) — RFC 8414 & RFC 7591 OAuth Discovery & DCR Support
 
 ### Summary
