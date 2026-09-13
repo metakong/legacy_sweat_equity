@@ -131,6 +131,13 @@ function buildMigratedDb() {
   for (const statement of statementsOf('migrations/0005_voice_orchestration.sql')) {
     raw.exec(statement);
   }
+  // 0006 promotes the parsed callback onto the account. Without it the
+  // migrated shape rejects the widened upsertCompany INSERT and the dialer's
+  // callback ordering has nothing to order by — a failure that would only
+  // surface in production otherwise.
+  for (const statement of statementsOf('migrations/0006_actionable_callbacks.sql')) {
+    raw.exec(statement);
+  }
   raw.close();
   return file;
 }

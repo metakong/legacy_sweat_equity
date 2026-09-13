@@ -33,6 +33,15 @@ export const ACTION_STORE = 'action_outbox';
 export const VOICE_DEBRIEF_URL = '/api/voice-debrief';
 export const ACTIVITY_URL = '/api/activity';
 
+/**
+ * The one Background Sync tag both outboxes register under.
+ *
+ * One tag, not two: the Service Worker's drain walks BOTH stores in a single
+ * pass, and a debrief queued behind a quick drop should not need a second
+ * browser wake-up to leave the device.
+ */
+export const SYNC_TAG = 'sync-agency-outbox';
+
 // ---------------------------------------------------------------------
 // STORAGE GUARDS
 // ---------------------------------------------------------------------
@@ -231,6 +240,47 @@ function normalizeTimestamp(value) {
 }
 
 /**
+ * Ask the browser to wake the Service Worker when connectivity returns.
+ *
+ * WHY THE SYNC API AND NOT THE `online` EVENT
+ * `initAudioQueueSync()` below only fires while a tab is alive. An agent who
+ * records a debrief in a dead zone, drives home and swipes the PWA closed has
+ * an outbox record that will sit there until they happen to reopen the app.
+ * The Background Sync API hands the drain to the browser: the Service Worker
+ * runs it on a restore of connectivity even with no page open.
+ *
+ * WHY THIS IS TOLERATED RATHER THAN AWAITED-BUT-FAILED
+ * SyncManager is Chromium-only. Safari on the S22's fallback path has no
+ * `registration.sync`, and a permission/privacy mode can make the promise
+ * reject outright. None of that is a reason to lose the capture: the record is
+ * already committed to IndexedDB by the time this runs, so every failure path
+ * just falls back to the `online` listener. It resolves to a boolean rather
+ * than throwing so callers — and tests — can observe the difference.
+ *
+ * @returns {Promise<boolean>} true when the browser accepted the registration.
+ */
+export function requestBackgroundSync(tag = SYNC_TAG) {
+  try {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return Promise.resolve(false);
+    const ready = navigator.serviceWorker.ready;
+    if (!ready || typeof ready.then !== 'function') return Promise.resolve(false);
+
+    return ready
+      .then((registration) => {
+        // No SyncManager (Safari/older WebKit) — the online listener covers it.
+        if (!registration || !registration.sync || typeof registration.sync.register !== 'function') {
+          return false;
+        }
+        return registration.sync.register(tag).then(() => true, () => false);
+      })
+      .catch(() => false);
+  } catch {
+    // A getter that throws in a privacy mode must not break the enqueue.
+    return Promise.resolve(false);
+  }
+}
+
+/**
  * Write one capture to the outbox.
  *
  * Resolves only after the transaction commits, so a UI that says "saved
@@ -250,7 +300,7 @@ export async function enqueueAudio(blob, metadata = {}) {
 
   const db = await openAgencyDatabase();
 
-  return new Promise((resolve, reject) => {
+  const saved = await new Promise((resolve, reject) => {
     let key = null;
     let tx;
     try {
@@ -266,6 +316,12 @@ export async function enqueueAudio(blob, metadata = {}) {
     tx.onerror = () => reject(tx.error || new Error('audio_outbox write failed'));
     tx.onabort = () => reject(tx.error || new Error('audio_outbox write aborted'));
   });
+
+  // Fire-and-forget on purpose: the capture is already durable, so scheduling
+  // the background drain must never delay (or fail) the promise the UI awaits.
+  requestBackgroundSync();
+
+  return saved;
 }
 
 function readOutbox(db, storeName = AUDIO_STORE) {
@@ -432,12 +488,20 @@ export async function enqueueAction(payload = {}) {
     company_id: companyId,
     disposition,
     mode: MODES.includes(payload?.mode) ? payload.mode : getState().mode,
+    // Sprint 6: a quick drop may carry the callback the agent promised, so the
+    // queued JSON replays the same commitment the live request would have sent.
+    next_action: typeof payload?.next_action === 'string' && payload.next_action.trim()
+      ? payload.next_action.trim().slice(0, 240)
+      : undefined,
+    next_action_date: typeof payload?.next_action_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payload.next_action_date)
+      ? payload.next_action_date
+      : undefined,
     timestamp: normalizeTimestamp(payload?.timestamp)
   });
 
   const db = await openAgencyDatabase();
 
-  return new Promise((resolve, reject) => {
+  const saved = await new Promise((resolve, reject) => {
     let key = null;
     let tx;
     try {
@@ -453,6 +517,12 @@ export async function enqueueAction(payload = {}) {
     tx.onerror = () => reject(tx.error || new Error('action_outbox write failed'));
     tx.onabort = () => reject(tx.error || new Error('action_outbox write aborted'));
   });
+
+  // Same fire-and-forget contract as enqueueAudio: the tap is already durable
+  // and the browser is simply asked to remember to drain it later.
+  requestBackgroundSync();
+
+  return saved;
 }
 
 export async function getActionQueueCount() {

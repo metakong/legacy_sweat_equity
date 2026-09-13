@@ -28,6 +28,13 @@ import {
   splitRouteBlocks,
   buildGoogleMapsUrl,
   ficaRecaptureEstimates,
+  ficaPitchHook,
+  FICA_ANNUAL_PREMIUM,
+  FICA_RATE,
+  projectStopsToRadar,
+  buildRouteRadar,
+  resolveCurrentPosition,
+  buildFieldLeadsUrl,
   hasCoordinates,
   mountCanvassView
 } from '../public/app/modules/canvass-view.js';
@@ -136,7 +143,7 @@ class FakeElement extends FakeEventTarget {
   }
 }
 
-function installDom() {
+function installDom({ geolocation = undefined } = {}) {
   const document = Object.assign(new FakeEventTarget(), {
     visibilityState: 'visible',
     documentElement: new FakeElement('html'),
@@ -144,12 +151,30 @@ function installDom() {
     // ui.js resolves chrome nodes by id; returning null is the "not in this
     // document" case, which every caller already handles.
     getElementById: () => null,
-    createElement: (tag) => new FakeElement(tag)
+    createElement: (tag) => new FakeElement(tag),
+    // SVG children MUST come from the SVG namespace; the canvass radar is the
+    // only caller, and this records the namespace so a regression to
+    // createElement() is caught rather than silently rendering nothing.
+    createElementNS: (namespace, tag) => {
+      const node = new FakeElement(tag);
+      node.namespaceURI = namespace;
+      return node;
+    }
   });
 
   globalThis.document = document;
   globalThis.window = new FakeEventTarget();
   globalThis.HTMLElement = FakeElement;
+
+  // `navigator` is getter-only on the Node global, so defineProperty it.
+  const navigator = {};
+  if (geolocation !== undefined) navigator.geolocation = geolocation;
+  Object.defineProperty(globalThis, 'navigator', {
+    value: navigator,
+    configurable: true,
+    writable: true
+  });
+
   return document;
 }
 
@@ -583,6 +608,281 @@ test('unmounting a view removes its DOM', async () => {
   destroy();
   assert.equal(container.children.length, 0, 'a mode switch must not leave a view behind');
 });
+
+// ---------------------------------------------------------------------
+// Sprint 6 — FICA pitch hook
+// ---------------------------------------------------------------------
+
+test('the FICA pitch hook is the exact 1500 x 7.65% formula the spec defines', () => {
+  const hook = ficaPitchHook(25);
+
+  assert.equal(hook.lives, 25);
+  assert.equal(hook.savings, Number((25 * FICA_ANNUAL_PREMIUM * FICA_RATE).toFixed(0)));
+  assert.equal(FICA_ANNUAL_PREMIUM, 1500);
+  assert.equal(FICA_RATE, 0.0765);
+  assert.match(hook.text, /Pitch Hook: Saves Owner ~\$\d[\d,]*\/yr in FICA taxes/);
+  assert.match(hook.text, /2,869/, '25 W-2 lives is ~$2,869 a year');
+});
+
+test('a company with no reported headcount gets no pitch hook rather than "$0"', () => {
+  assert.equal(ficaPitchHook(0), null);
+  assert.equal(ficaPitchHook(null), null);
+  assert.equal(ficaPitchHook(undefined), null);
+  assert.equal(ficaPitchHook(''), null);
+  assert.equal(ficaPitchHook('north'), null);
+  assert.equal(ficaPitchHook(-4), null, 'a negative headcount is not a saving');
+});
+
+test('the canvass card renders the pitch hook and the pending callback', async () => {
+  installDom();
+  const container = new FakeElement('div');
+
+  const leads = [
+    leadFixture({
+      company_id: 'c1',
+      company_name: 'Alpha Co',
+      estimated_w2_count: 25,
+      next_action: 'Ask for Dana before 9am',
+      next_action_date: '2026-10-06'
+    })
+  ];
+
+  const destroy = mountCanvassView(container, { fetchImpl: leadsFetcher(leads) });
+  await tick(5);
+
+  const text = textOf(container);
+  assert.match(text, /Pitch Hook: Saves Owner ~\$2,869\/yr in FICA taxes/);
+  assert.match(text, /2026-10-06: Ask for Dana before 9am/);
+
+  destroy();
+});
+
+// ---------------------------------------------------------------------
+// Sprint 6 — micro-radar
+// ---------------------------------------------------------------------
+
+test('radar projection normalizes into 0-100 and flips the latitude axis', () => {
+  const projected = projectStopsToRadar([
+    { lat: 37.20, long: -93.30 }, // south-west
+    { lat: 37.30, long: -93.20 }  // north-east
+  ]);
+
+  assert.equal(projected.length, 2);
+  for (const { cx, cy } of projected) {
+    assert.ok(cx >= 0 && cx <= 100, `cx ${cx} out of the viewBox`);
+    assert.ok(cy >= 0 && cy <= 100, `cy ${cy} out of the viewBox`);
+  }
+
+  const [southWest, northEast] = projected;
+  assert.ok(northEast.cx > southWest.cx, 'east is further right');
+  // SVG y grows DOWN, so north must be a SMALLER cy or the radar renders upside down.
+  assert.ok(northEast.cy < southWest.cy, 'north is further up');
+
+  assert.equal(southWest.cx, 8);
+  assert.equal(southWest.cy, 92);
+});
+
+test('a single-stop radar does not divide by zero', () => {
+  const [only] = projectStopsToRadar([{ lat: 37.2, long: -93.29 }]);
+
+  assert.equal(only.cx, 50, 'a zero longitude span centres the marker');
+  assert.equal(only.cy, 50);
+});
+
+test('stops without coordinates are excluded from the radar, not plotted at 0,0', () => {
+  const projected = projectStopsToRadar([
+    { lat: 37.2, long: -93.29 },
+    { lat: null, long: null }
+  ]);
+
+  assert.equal(projected.length, 1);
+});
+
+test('the radar is real SVG in the SVG namespace with a polyline and circles', () => {
+  installDom();
+  const stops = [
+    { company_name: 'Alpha Co', lat: 37.20, long: -93.30 },
+    { company_name: 'Bravo Co', lat: 37.21, long: -93.29 },
+    { company_name: 'Charlie Co', lat: 37.22, long: -93.28 }
+  ];
+
+  const svg = buildRouteRadar(stops);
+
+  assert.ok(svg, 'three routable stops must produce a radar');
+  assert.equal(svg.tagName, 'SVG');
+  assert.equal(svg.namespaceURI, 'http://www.w3.org/2000/svg', 'createElement() would break this');
+  assert.equal(svg.getAttribute('viewBox'), '0 0 100 100');
+
+  const polyline = svg.children.find((child) => child.tagName === 'POLYLINE');
+  assert.ok(polyline, 'the TSP order is drawn as a polyline');
+  assert.equal(polyline.getAttribute('points').split(' ').length, 3);
+  assert.equal(polyline.namespaceURI, 'http://www.w3.org/2000/svg');
+
+  const circles = svg.children.filter((child) => child.tagName === 'CIRCLE');
+  assert.equal(circles.length, 3);
+  assert.ok(circles.every((c) => c.getAttribute('cx') !== null && c.getAttribute('cy') !== null));
+  assert.match(circles[0].getAttribute('class'), /canvass-radar-start/, 'the first stop is the start');
+  assert.equal(circles[0].getAttribute('data-company'), 'Alpha Co');
+});
+
+test('a radar with nothing routable returns null rather than an empty box', () => {
+  installDom();
+  assert.equal(buildRouteRadar([]), null);
+  assert.equal(buildRouteRadar([{ company_name: 'No Geo', lat: null, long: null }]), null);
+});
+
+test('the mounted canvass view draws the radar for the first block only', async () => {
+  installDom();
+  const container = new FakeElement('div');
+
+  // 12 routable stops => a Morning block of 10 and a Midday block of 2.
+  const leads = Array.from({ length: 12 }, (_, i) => leadFixture({
+    company_id: `c${i}`,
+    company_name: `Stop ${i}`,
+    lat: 37.2 + i * 0.001,
+    long: -93.3 + i * 0.001
+  }));
+
+  const destroy = mountCanvassView(container, { fetchImpl: leadsFetcher(leads) });
+  await tick(5);
+
+  const svgs = container.querySelectorAll('svg');
+  assert.equal(svgs.length, 1, 'one radar, not one per block');
+
+  const circles = svgs[0].children.filter((child) => child.tagName === 'CIRCLE');
+  assert.equal(circles.length, ROUTE_BLOCK_SIZE, 'the first 10-stop chunk is what gets plotted');
+
+  destroy();
+});
+
+// ---------------------------------------------------------------------
+// Sprint 6 — geolocation
+// ---------------------------------------------------------------------
+
+test('resolveCurrentPosition reads a real fix and never rejects', async () => {
+  const fake = {
+    getCurrentPosition: (success) => success({ coords: { latitude: 37.2089, longitude: -93.2923 } })
+  };
+
+  assert.deepEqual(await resolveCurrentPosition({ geolocation: fake }), { lat: 37.2089, long: -93.2923 });
+});
+
+test('a denied permission, an error and a garbage fix all resolve to null', async () => {
+  const denied = { getCurrentPosition: (_ok, fail) => fail({ code: 1 }) };
+  const garbage = { getCurrentPosition: (ok) => ok({ coords: { latitude: 'north', longitude: null } }) };
+  const throws = { getCurrentPosition: () => { throw new Error('insecure context'); } };
+
+  assert.equal(await resolveCurrentPosition({ geolocation: denied }), null);
+  assert.equal(await resolveCurrentPosition({ geolocation: garbage }), null);
+  assert.equal(await resolveCurrentPosition({ geolocation: throws }), null);
+});
+
+test('a browser with no geolocation API at all resolves to null', async () => {
+  // installDom() with no geolocation: `navigator.geolocation` is undefined.
+  installDom();
+  assert.equal(await resolveCurrentPosition(), null);
+  assert.equal(await resolveCurrentPosition({ geolocation: {} }), null, 'a shape with no method');
+});
+
+test('the field URL carries the fix only when there is one', () => {
+  assert.equal(buildFieldLeadsUrl(null), '/api/leads?mode=FIELD');
+  assert.equal(buildFieldLeadsUrl({}), '/api/leads?mode=FIELD');
+  assert.match(
+    buildFieldLeadsUrl({ lat: 37.2089, long: -93.2923 }),
+    /^\/api\/leads\?mode=FIELD&lat=37\.2089&lng=-93\.2923$/
+  );
+});
+
+test('mounting the canvass view sends the device fix to the field queue', async () => {
+  installDom({
+    geolocation: {
+      getCurrentPosition: (success) => success({ coords: { latitude: 37.2089, longitude: -93.2923 } })
+    }
+  });
+  const container = new FakeElement('div');
+  const calls = [];
+
+  const destroy = mountCanvassView(container, { fetchImpl: leadsFetcher([leadFixture()], calls) });
+  await tick(5);
+
+  const leadsCall = calls.find((entry) => entry.url.includes('/api/leads'));
+  assert.ok(leadsCall, 'the field queue was requested');
+  assert.match(leadsCall.url, /mode=FIELD/);
+  assert.match(leadsCall.url, /lat=37\.2089/);
+  assert.match(leadsCall.url, /lng=-93\.2923/);
+
+  destroy();
+});
+
+test('a denied location still renders the list, unfenced', async () => {
+  installDom({ geolocation: { getCurrentPosition: (_ok, fail) => fail({ code: 1 }) } });
+  const container = new FakeElement('div');
+  const calls = [];
+
+  const destroy = mountCanvassView(container, {
+    fetchImpl: leadsFetcher([leadFixture({ company_name: 'Alpha Co' })], calls)
+  });
+  await tick(5);
+
+  assert.match(textOf(container), /Alpha Co/, 'a denied prompt must never blank the day');
+  assert.match(textOf(container), /Location unavailable/);
+
+  const leadsCall = calls.find((entry) => entry.url.includes('/api/leads'));
+  assert.equal(leadsCall.url, '/api/leads?mode=FIELD', 'and the request is not fenced');
+
+  destroy();
+});
+
+test('a missing geolocation API does not throw a white screen', async () => {
+  // The whole point: this is the unsupported-browser case, and the view has to
+  // mount anyway.
+  installDom();
+  const container = new FakeElement('div');
+
+  const destroy = mountCanvassView(container, {
+    fetchImpl: leadsFetcher([leadFixture({ company_name: 'Alpha Co' })])
+  });
+  await tick(5);
+
+  assert.match(textOf(container), /Alpha Co/);
+  destroy();
+});
+
+test('a fenced query that comes back empty retries once without the fence', async () => {
+  installDom({
+    geolocation: {
+      getCurrentPosition: (success) => success({ coords: { latitude: 37.2089, longitude: -93.2923 } })
+    }
+  });
+  const container = new FakeElement('div');
+  const calls = [];
+
+  // First (fenced) call: an empty cell with geo_filter true. Second: the full list.
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    const fenced = String(url).includes('lat=');
+    return {
+      ok: true,
+      status: 200,
+      json: async () => (fenced
+        ? { success: true, data: [], geo_filter: true, geohash: '9ytet' }
+        : { success: true, data: [leadFixture({ company_name: 'Alpha Co' })], geo_filter: false, geohash: null })
+    };
+  };
+
+  const destroy = mountCanvassView(container, { fetchImpl });
+  await tick(5);
+
+  assert.equal(calls.length, 2, 'a stale fix must not cost the agent the day');
+  assert.match(calls[0], /lat=/, 'the first attempt is fenced');
+  assert.equal(calls[1], '/api/leads?mode=FIELD', 'the retry is not');
+  assert.match(textOf(container), /Alpha Co/);
+
+  destroy();
+});
+
+
+
 
 // ---------------------------------------------------------------------
 // D365 COMPLIANCE EXPORT

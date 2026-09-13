@@ -29,7 +29,8 @@
 
 import { Hono } from 'hono';
 import { normalizeCompany, upsertCompany, companyExists, ValidationError } from '../lib/db.js';
-import { asId, cleanCapped } from '../lib/validate.js';
+import { asId, cleanCapped, asLatitude, asLongitude } from '../lib/validate.js';
+import { encodeGeohash } from '../lib/geo.js';
 
 const leads = new Hono();
 
@@ -85,6 +86,8 @@ export const LEAD_SELECT = `
     co.is_hdhp,
     co.estimated_w2_count,
     co.geohash,
+    co.next_action,
+    co.next_action_date,
     co.notes,
     -- The company column is decision_maker; the voice extractor and the views
     -- both call it decision_maker_name. Aliased here so the two spellings can
@@ -95,19 +98,64 @@ export const LEAD_SELECT = `
   WHERE co.agent_email = ?
     AND co.status NOT IN ('DISQUALIFIED', 'DO_NOT_CONTACT')
     AND co.confidence_score BETWEEN ? AND ?
+`;
+
+/**
+ * Sprint 6 — due callbacks float to the top of the Monday dialer stack.
+ *
+ * WHY A CASE AND NOT A SECOND QUERY
+ * The dialer still has to show every dialable account; a due callback is a
+ * PRIORITY, not a filter. Sorting in the same statement keeps one plan shape
+ * and one result set, and the CASE is a constant per row so it costs two
+ * comparisons rather than a join back to the activity log.
+ *
+ * CURRENT_DATE — not datetime('now') — because next_action_date is a DAY, not
+ * an instant. datetime('now') carries the time, so an account due this morning
+ * would compare as "before now" and read as overdue all afternoon.
+ */
+export const CALLBACK_FIRST_ORDER = `
+  ORDER BY
+    CASE WHEN co.next_action_date IS NOT NULL AND co.next_action_date <= CURRENT_DATE THEN 0 ELSE 1 END,
+    co.confidence_score DESC,
+    co.company_name COLLATE NOCASE ASC
+  LIMIT ?
+`;
+
+/** Every other mode keeps the stable confidence-then-name sequence. */
+export const DEFAULT_ORDER = `
   ORDER BY co.confidence_score DESC, co.company_name COLLATE NOCASE ASC
   LIMIT ?
 `;
 
+/** Field mode refuses to route scattered accounts: a 5-char cell is ~3 miles. */
+export const FIELD_PROXIMITY_PREDICATE = 'AND substr(co.geohash, 1, 5) = ?';
+
+/** Characters in a geohash cell used for the field-proximity fence. */
+export const FIELD_GEOHASH_PRECISION = 5;
+
+
 /**
- * GET /api/leads?mode=PHONE|FIELD|TRIAGE
+ * GET /api/leads?mode=PHONE|FIELD|TRIAGE[&lat=&lng=]
  *
- * Returns `{ success, mode, count, data }`. The agent's own rows only: the
- * tenant predicate is the leading clause, exactly as in the radar lookup.
+ * Returns `{ success, mode, count, data, geohash? }`. The agent's own rows only:
+ * the tenant predicate is the leading clause, exactly as in the radar lookup.
  *
  * Suppressed records are excluded from every mode, TRIAGE included: an account
  * that stayed in the hygiene queue after being disqualified would be
  * re-disqualified every Friday, and the queue would never empty.
+ *
+ * WHY FIELD NARROWS BY GEOHASH AND PHONE DOES NOT
+ * A phone list is worked from a chair, so a good dial anywhere in the metro is
+ * worth making. A field list is worked on foot, and a "route" that starts with a
+ * stop 20 miles from the next one is not a route — it is a day of driving. The
+ * five-character cell is roughly a 3-mile box, so filtering on its prefix
+ * guarantees every returned stop is inside the agent's immediate corridor
+ * without a haversine scan in SQL.
+ *
+ * The prefix filter is the SAME expression indexed by idx_companies_agent_geohash6
+ * (which indexes SUBSTR(geohash, 1, 6)); SQLite can use the six-character index
+ * for a five-character equality because a shorter prefix is a coarser range, so
+ * this stays an index range scan rather than a full table walk.
  */
 export async function handleLeads(c) {
   const userEmail = c.get('userEmail');
@@ -121,15 +169,42 @@ export async function handleLeads(c) {
 
   const band = CONFIDENCE_BANDS[requested];
 
-  const { results } = await c.env.DB
-    .prepare(LEAD_SELECT)
-    .bind(userEmail, band.min, band.max, LEAD_LIMITS[requested])
-    .all();
+  // FIELD proximity. Missing or unparsable coordinates are not an error: the
+  // agent may have denied the permission prompt, and a failed geolocation call
+  // must not blank the canvass list. The filter is simply skipped, and the
+  // response says so via `geo_filter: false` so the view can hint at it.
+  let geohashPrefix = null;
+  if (requested === 'FIELD') {
+    const lat = asLatitude(url.searchParams.get('lat'));
+    const lng = asLongitude(url.searchParams.get('lng') ?? url.searchParams.get('long'));
+    if (lat !== null && lng !== null) {
+      geohashPrefix = encodeGeohash(lat, lng, FIELD_GEOHASH_PRECISION);
+    }
+  }
+
+  const sql = LEAD_SELECT
+    + (geohashPrefix ? `  ${FIELD_PROXIMITY_PREDICATE}\n` : '')
+    + (requested === 'PHONE' ? CALLBACK_FIRST_ORDER : DEFAULT_ORDER);
+
+  const binds = [userEmail, band.min, band.max];
+  if (geohashPrefix) binds.push(geohashPrefix);
+  binds.push(LEAD_LIMITS[requested]);
+
+  const { results } = await c.env.DB.prepare(sql).bind(...binds).all();
 
   const data = Array.isArray(results) ? results : [];
 
   return c.json(
-    { success: true, mode: requested, count: data.length, data },
+    {
+      success: true,
+      mode: requested,
+      count: data.length,
+      // Which cell the field queue was fenced to, or null when the query was
+      // not narrowed. The canvass view draws its radar from this.
+      geohash: geohashPrefix,
+      geo_filter: geohashPrefix !== null,
+      data
+    },
     200,
     { 'Cache-Control': 'no-store' }
   );

@@ -126,6 +126,11 @@ export function normalizeCompany(raw) {
       ? encodeGeohash(latitude, longitude, 7)
       : null,
     status,
+    // Sprint 6 — the live callback commitment (migrations/0006). Both are
+    // nullable with no non-null default, so a payload that omits them keeps
+    // whatever the row already holds rather than manufacturing a value.
+    next_action: cleanCapped(raw?.next_action ?? raw?.next_action_text, 240) || null,
+    next_action_date: asIsoDate(raw?.next_action_date) || null,
     // Presence flags for upsertCompany. Numbers only — D1 cannot bind a
     // boolean, and normalizeCompany is contractually primitives-only.
     __has_current_voluntary_carrier: isSupplied(raw?.current_voluntary_carrier) ? 1 : 0,
@@ -134,6 +139,8 @@ export function normalizeCompany(raw) {
     __has_estimated_w2_count: isSupplied(raw?.estimated_w2_count) ? 1 : 0,
     __has_confidence_score: isSupplied(raw?.confidence_score) ? 1 : 0,
     __has_status: isSupplied(raw?.status) ? 1 : 0,
+    __has_next_action: isSupplied(raw?.next_action ?? raw?.next_action_text) ? 1 : 0,
+    __has_next_action_date: isSupplied(raw?.next_action_date) ? 1 : 0,
     // A record only counts as synced once it carries the D365 identity that
     // proves it round-tripped. Trusting a client-sent flag here is how
     // net-new leads silently drop out of the Tier 3 export.
@@ -161,10 +168,11 @@ export async function upsertCompany(db, company, userEmail) {
       company_phone, decision_maker, notes,
       current_voluntary_carrier, major_medical_carrier, is_hdhp,
       estimated_w2_count, confidence_score, geohash, status,
+      next_action, next_action_date,
       agent_email
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(company_id, agent_email) DO UPDATE SET
       d365_lead_id        = COALESCE(excluded.d365_lead_id, companies.d365_lead_id),
@@ -223,6 +231,10 @@ export async function upsertCompany(db, company, userEmail) {
       estimated_w2_count        = CASE WHEN ? = 1 THEN excluded.estimated_w2_count        ELSE companies.estimated_w2_count        END,
       confidence_score          = CASE WHEN ? = 1 THEN excluded.confidence_score          ELSE companies.confidence_score          END,
       status                    = CASE WHEN ? = 1 THEN excluded.status                    ELSE companies.status                    END,
+      -- Sprint 6 callback pointer. Same presence-guard contract: only a payload
+      -- that actually carried a commitment may move the pointer.
+      next_action               = CASE WHEN ? = 1 THEN excluded.next_action               ELSE companies.next_action               END,
+      next_action_date          = CASE WHEN ? = 1 THEN excluded.next_action_date          ELSE companies.next_action_date          END,
       -- Spatial: a full coordinate pair re-derives the hash, a payload with no
       -- coordinates leaves it alone, and a HALF-supplied pair clears it rather
       -- than leaving a hash that no longer describes where the account is.
@@ -270,6 +282,8 @@ export async function upsertCompany(db, company, userEmail) {
     company.confidence_score ?? 30,
     company.geohash ?? null,
     company.status ?? 'ACTIVE',
+    company.next_action ?? null,
+    company.next_action_date ?? null,
     userEmail,
     // Presence flags consumed by the CASE expressions above, in order.
     company.__has_current_voluntary_carrier ?? 0,
@@ -277,7 +291,9 @@ export async function upsertCompany(db, company, userEmail) {
     company.__has_is_hdhp ?? 0,
     company.__has_estimated_w2_count ?? 0,
     company.__has_confidence_score ?? 0,
-    company.__has_status ?? 0
+    company.__has_status ?? 0,
+    company.__has_next_action ?? 0,
+    company.__has_next_action_date ?? 0
   ).run();
 
   return company.company_id;

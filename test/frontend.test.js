@@ -39,7 +39,9 @@ import {
   flushActionQueue,
   flushAllQueues,
   getActionQueueCount,
-  ACTION_STORE
+  ACTION_STORE,
+  SYNC_TAG,
+  requestBackgroundSync
 } from '../public/app/modules/state.js';
 
 // Sprint 5 pulls two more browser modules into this harness: the dialer (to
@@ -353,6 +355,7 @@ function installBrowser() {
   return {
     document,
     window: windowTarget,
+    navigator,
     hosts,
     modeButtons,
     storage: globalThis.localStorage,
@@ -370,6 +373,50 @@ function installBrowser() {
   };
 }
 
+/**
+ * Attach a fake Service Worker registration to `navigator`.
+ *
+ * `sync` is optional on purpose: Chromium has it, WebKit does not, and the
+ * whole point of requestBackgroundSync() is that the second shape must not
+ * throw. `options.sync` omitted => a registration with no SyncManager at all.
+ */
+function installServiceWorker({ sync = undefined, readyRejects = false } = {}) {
+  const registrations = [];
+  const registration = {};
+
+  if (sync) {
+    registration.sync = {
+      register: (tag) => {
+        registrations.push(tag);
+        if (typeof sync === 'function') return sync(tag);
+        if (sync.reject) return Promise.reject(new Error(sync.reject));
+        return Promise.resolve();
+      }
+    };
+  }
+
+  Object.defineProperty(globalThis.navigator, 'serviceWorker', {
+    value: {
+      ready: readyRejects
+        ? Promise.reject(new Error('no active worker'))
+        : Promise.resolve(registration)
+    },
+    configurable: true,
+    writable: true
+  });
+
+  return { registrations, registration };
+}
+
+/** Remove the Service Worker binding so a later test sees a plain browser. */
+function removeServiceWorker() {
+  try {
+    delete globalThis.navigator.serviceWorker;
+  } catch {
+    /* nothing to remove */
+  }
+}
+
 /** Text renderer for the fake Element tree, used for content assertions. */
 function textOf(node) {
   return node.children.length
@@ -381,12 +428,33 @@ async function freshBrowser() {
   const browser = installBrowser();
   await closeAgencyDatabase();
   setState({ mode: 'FIELD' });
+  // installBrowser() rebuilds navigator from scratch, so a Service Worker
+  // attached by a previous test cannot leak into this one.
   return browser;
+}
+
+/**
+ * A browser with a Service Worker, for the Sprint 6 background-sync tests.
+ * Always pair with removeServiceWorker() so later tests still see a plain one.
+ */
+async function browserWithServiceWorker(options = {}) {
+  const browser = await freshBrowser();
+  const sw = installServiceWorker(options);
+  return { ...browser, ...sw };
 }
 
 function audioBlob(type = 'audio/webm;codecs=opus') {
   return new Blob([new Uint8Array([1, 2, 3, 4])], { type });
 }
+
+/**
+ * Let a fire-and-forget promise chain settle.
+ *
+ * requestBackgroundSync() is deliberately not awaited by the enqueue, so the
+ * registration lands a few microtasks later; a macrotask turn is the cheapest
+ * way to observe it without coupling the test to the exact chain length.
+ */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 // ---------------------------------------------------------------------
 // STATE STORE
@@ -1037,4 +1105,140 @@ test('impossible coordinates are dropped rather than sent as zero', () => {
   assert.equal(sparse.city, undefined);
   assert.equal(sparse.zip_code, '65806');
 });
+
+// ---------------------------------------------------------------------
+// Sprint 6 — Background Sync registration (state.js)
+// ---------------------------------------------------------------------
+
+test('enqueueAudio registers the background sync tag when SyncManager exists', async () => {
+  const { registrations } = await browserWithServiceWorker({ sync: true });
+
+  try {
+    await enqueueAudio(audioBlob(), { company_id: 'acct-1' });
+    // The registration is fire-and-forget, so let its microtasks drain.
+    await settle();
+    assert.deepEqual(registrations, [SYNC_TAG]);
+  } finally {
+    removeServiceWorker();
+  }
+});
+
+test('enqueueAction registers the same tag as the audio outbox', async () => {
+  const { registrations } = await browserWithServiceWorker({ sync: true });
+
+  try {
+    await enqueueAction({ company_id: 'acct-1', disposition: 'VM_NO_ANSWER', mode: 'PHONE' });
+    await settle();
+    assert.deepEqual(registrations, [SYNC_TAG], 'one tag drains both stores');
+  } finally {
+    removeServiceWorker();
+  }
+});
+
+test('a browser without SyncManager enqueues normally and reports false', async () => {
+  // The registration object exists but has no `sync` — WebKit's actual shape.
+  await browserWithServiceWorker({});
+
+  try {
+    const result = await requestBackgroundSync();
+    assert.equal(result, false, 'no SyncManager is a capability gap, not an error');
+
+    // The capture itself must still land in the outbox.
+    const saved = await enqueueAudio(audioBlob(), { company_id: 'acct-1' });
+    assert.ok(saved.key, 'the record is durable regardless of the browser');
+    assert.equal(await getAudioQueueCount(), 1);
+  } finally {
+    removeServiceWorker();
+  }
+});
+
+test('a rejected sync registration never breaks the enqueue', async () => {
+  await browserWithServiceWorker({ sync: { reject: 'NotAllowedError' } });
+
+  try {
+    assert.equal(await requestBackgroundSync(), false);
+
+    const saved = await enqueueAction({ company_id: 'acct-1', disposition: 'VM_NO_ANSWER', mode: 'PHONE' });
+    assert.ok(saved.key);
+    assert.equal(await getActionQueueCount(), 1);
+  } finally {
+    removeServiceWorker();
+  }
+});
+
+test('a rejected navigator.serviceWorker.ready never breaks the enqueue', async () => {
+  await browserWithServiceWorker({ sync: true, readyRejects: true });
+
+  try {
+    assert.equal(await requestBackgroundSync(), false);
+    assert.ok((await enqueueAudio(audioBlob(), { company_id: 'acct-1' })).key);
+  } finally {
+    removeServiceWorker();
+  }
+});
+
+test('no service worker at all is handled without throwing', async () => {
+  await freshBrowser();
+
+  // No installServiceWorker(): `serviceWorker` is not in navigator.
+  assert.equal(await requestBackgroundSync(), false);
+  assert.ok((await enqueueAudio(audioBlob(), { company_id: 'acct-1' })).key);
+});
+
+test('a queued quick drop replays its callback fields to the server', async () => {
+  await freshBrowser();
+
+  const saved = await enqueueAction({
+    company_id: 'acct-1',
+    disposition: 'GATEKEEPER_BLOCK',
+    mode: 'PHONE',
+    next_action: 'Ask for Dana before 9am',
+    next_action_date: '2026-10-06'
+  });
+
+  assert.equal(saved.record.next_action, 'Ask for Dana before 9am');
+  assert.equal(saved.record.next_action_date, '2026-10-06');
+
+  const sent = [];
+  await flushActionQueue({
+    fetchImpl: async (url, init) => {
+      sent.push(JSON.parse(init.body));
+      return new Response('{}', { status: 200 });
+    }
+  });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].next_action, 'Ask for Dana before 9am');
+  assert.equal(sent[0].next_action_date, '2026-10-06');
+});
+
+test('a queued quick drop omits callback fields it was never given', async () => {
+  await freshBrowser();
+
+  const saved = await enqueueAction({ company_id: 'acct-1', disposition: 'VM_NO_ANSWER', mode: 'PHONE' });
+
+  // The record carries the keys but with undefined values; what matters is that
+  // the serialized body the server receives has neither field.
+  assert.equal(saved.record.next_action, undefined);
+  assert.equal(saved.record.next_action_date, undefined);
+  assert.equal('next_action' in JSON.parse(JSON.stringify(saved.record)), false);
+  assert.equal('next_action_date' in JSON.parse(JSON.stringify(saved.record)), false);
+});
+
+test('a garbage callback date is dropped from the queued record, not replayed', async () => {
+  await freshBrowser();
+
+  const saved = await enqueueAction({
+    company_id: 'acct-1',
+    disposition: 'VM_NO_ANSWER',
+    mode: 'PHONE',
+    next_action: 'Valid text',
+    next_action_date: 'soon'
+  });
+
+  assert.equal(saved.record.next_action, 'Valid text');
+  assert.equal(saved.record.next_action_date, undefined, 'the server would reject it anyway');
+  assert.equal('next_action_date' in JSON.parse(JSON.stringify(saved.record)), false);
+});
+
 

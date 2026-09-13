@@ -472,6 +472,13 @@ async function handleQuickDrop(c, body, disposition, userEmail) {
   const activityType = mapVoiceActivityType(mode, disposition);
   const disqualified = QUICK_DROP_DISQUALIFYING.has(disposition);
 
+  // Sprint 6 — a quick drop may carry the callback the agent committed to. The
+  // text is capped like every other free-text field; the date is normalized to
+  // ISO-8601 (or dropped) because an unparseable value would sort as garbage in
+  // the dialer's due-date ordering.
+  const nextAction = cleanCapped(body?.next_action ?? body?.next_action_text, 240) || null;
+  const nextActionDate = asIsoDate(body?.next_action_date);
+
   // A quick drop is by definition not a decision-maker conversation, so
   // dm_contacts stays 0; the physical verb (dial or walk-in) is what counts.
   const counters = mode === 'PHONE'
@@ -528,6 +535,24 @@ async function handleQuickDrop(c, body, disposition, userEmail) {
             confidence_score = 0
         WHERE company_id = ? AND agent_email = ?
       `).bind(companyId, userEmail));
+    } else if (nextAction || nextActionDate) {
+      // Sprint 6: a quick drop can carry the commitment the agent tapped out
+      // between dials ("try again Tuesday"). Presence-guarded the same way as
+      // the voice path: a drop that supplies only the text must not blank the
+      // date, and vice versa.
+      statements.push(c.env.DB.prepare(`
+        UPDATE companies
+        SET next_action      = CASE WHEN ? = 1 THEN ? ELSE next_action END,
+            next_action_date = CASE WHEN ? = 1 THEN ? ELSE next_action_date END
+        WHERE company_id = ? AND agent_email = ?
+      `).bind(
+        nextAction ? 1 : 0,
+        nextAction,
+        nextActionDate ? 1 : 0,
+        nextActionDate,
+        companyId,
+        userEmail
+      ));
     }
 
     const results = await c.env.DB.batch(statements);

@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS companies (
     lat REAL, long REAL,
     lead_source TEXT DEFAULT 'Cold Call',
     rating TEXT DEFAULT 'Cold',
+    -- Sprint 6: the account's live callback commitment, promoted off the
+    -- append-only activity log so the dialer can order by it with one indexed
+    -- range scan (migrations/0006_actionable_callbacks.sql).
+    next_action TEXT,
+    next_action_date TEXT,
     employees INTEGER, industry TEXT,
     sic_code TEXT,
     account_number TEXT,
@@ -170,6 +175,13 @@ CREATE INDEX IF NOT EXISTS idx_companies_agent_confidence
         confidence_score,
         status
     );
+
+-- Sprint 6: due-callback-first ordering for the Monday dialer stack. Partial so
+-- the many accounts with no pending commitment never enter the b-tree
+-- (migrations/0006_actionable_callbacks.sql).
+CREATE INDEX IF NOT EXISTS idx_companies_callback
+    ON companies(agent_email, next_action_date)
+    WHERE next_action_date IS NOT NULL;
 
 -- ---------------------------------------------------------------------
 -- 5. PIPELINE EVENTS — audit log for stage transitions.

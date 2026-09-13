@@ -568,6 +568,122 @@ test('a failed counter write rolls the entire voice commit back', async () => {
 });
 
 // ---------------------------------------------------------------------
+// Sprint 6 — the parsed callback lands on the account
+// ---------------------------------------------------------------------
+
+test('a debrief persists the parsed callback onto the company row', async () => {
+  const env = envFor();
+  await seedCompany(env, { company_id: 'acct-cb', company_name: 'Callback Co', confidence_score: 40 });
+
+  const { impl } = stubProviders();
+  const original = globalThis.fetch;
+  globalThis.fetch = impl;
+  try {
+    const res = await postVoice(env, audioForm({ companyId: 'acct-cb' }));
+    assert.equal(res.status, 200, JSON.stringify(await res.clone().json().catch(() => null)));
+  } finally {
+    globalThis.fetch = original;
+  }
+
+  const row = env.DB._raw.prepare(
+    'SELECT next_action, next_action_date FROM companies WHERE company_id = ?'
+  ).get('acct-cb');
+
+  assert.equal(row.next_action, EXTRACTION.next_action, 'the commitment is promoted to the account');
+  assert.equal(row.next_action_date, EXTRACTION.next_action_date);
+
+  // The audit trail is untouched: the activity still carries its own copy.
+  const activity = env.DB._raw.prepare('SELECT next_action, next_action_date FROM activities').get();
+  assert.equal(activity.next_action, EXTRACTION.next_action);
+  assert.equal(activity.next_action_date, EXTRACTION.next_action_date);
+});
+
+test('a debrief that hears no commitment must not erase the existing callback', async () => {
+  const env = envFor();
+  await seedCompany(env, { company_id: 'acct-keep', company_name: 'Keep Co', confidence_score: 40 });
+
+  // The agent promised a callback on the previous dial.
+  env.DB._raw.prepare(
+    `UPDATE companies SET next_action = ?, next_action_date = ? WHERE company_id = ?`
+  ).run('Call Dana back Monday', '2026-10-05', 'acct-keep');
+
+  // This debrief confirms a carrier but mentions no next step. The extractor
+  // reports NONE/null, which is the exact case that must not clear the pointer.
+  const { impl } = stubProviders({
+    ...EXTRACTION,
+    next_action: 'NONE',
+    next_action_date: null
+  });
+  const original = globalThis.fetch;
+  globalThis.fetch = impl;
+  try {
+    const res = await postVoice(env, audioForm({ companyId: 'acct-keep' }));
+    assert.equal(res.status, 200);
+  } finally {
+    globalThis.fetch = original;
+  }
+
+  const row = env.DB._raw.prepare(
+    'SELECT next_action, next_action_date, confidence_score FROM companies WHERE company_id = ?'
+  ).get('acct-keep');
+
+  assert.equal(row.next_action, 'Call Dana back Monday', 'a null must never clear a real commitment');
+  assert.equal(row.next_action_date, '2026-10-05');
+  assert.equal(row.confidence_score, EXTRACTION.confidence_score, 'but the rest of the debrief still landed');
+});
+
+test('a later debrief does replace an old callback with a new one', async () => {
+  const env = envFor();
+  await seedCompany(env, { company_id: 'acct-new', company_name: 'New Promise Co', confidence_score: 40 });
+
+  env.DB._raw.prepare(
+    `UPDATE companies SET next_action = ?, next_action_date = ? WHERE company_id = ?`
+  ).run('Old promise', '2026-09-01', 'acct-new');
+
+  const { impl } = stubProviders({
+    ...EXTRACTION,
+    next_action: 'FIELD_DROP',
+    next_action_date: '2026-11-02'
+  });
+  const original = globalThis.fetch;
+  globalThis.fetch = impl;
+  try {
+    const res = await postVoice(env, audioForm({ companyId: 'acct-new' }));
+    assert.equal(res.status, 200);
+  } finally {
+    globalThis.fetch = original;
+  }
+
+  const row = env.DB._raw.prepare('SELECT next_action, next_action_date FROM companies WHERE company_id = ?')
+    .get('acct-new');
+
+  assert.equal(row.next_action, 'FIELD_DROP');
+  assert.equal(row.next_action_date, '2026-11-02');
+});
+
+test('a debrief with no account writes nothing back to any company row', async () => {
+  const env = envFor();
+  await seedCompany(env, { company_id: 'acct-other', company_name: 'Untouched Co', confidence_score: 40 });
+
+  const { impl } = stubProviders();
+  const original = globalThis.fetch;
+  globalThis.fetch = impl;
+  try {
+    const res = await postVoice(env, audioForm({ companyId: null }));
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).company_id, null);
+  } finally {
+    globalThis.fetch = original;
+  }
+
+  const row = env.DB._raw.prepare(
+    'SELECT next_action, next_action_date FROM companies WHERE company_id = ?'
+  ).get('acct-other');
+  assert.equal(row.next_action, null, 'an unlinked debrief cannot touch an account');
+  assert.equal(row.next_action_date, null);
+});
+
+// ---------------------------------------------------------------------
 // scripts/backfill-geohashes.cjs
 // ---------------------------------------------------------------------
 

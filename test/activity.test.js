@@ -196,3 +196,107 @@ test('a legacy silent log still works and does not become a quick drop', async (
     'the legacy path still writes activity_logs'
   );
 });
+
+// ---------------------------------------------------------------------
+// Sprint 6 — a quick drop can carry the callback the agent promised
+// ---------------------------------------------------------------------
+
+test('a quick drop with a callback writes it to the account', async () => {
+  const env = envWithCompany({ confidence: 60 });
+
+  const res = await postActivity(env, {
+    company_id: 'acct-1',
+    disposition: 'GATEKEEPER_BLOCK',
+    mode: 'PHONE',
+    next_action: 'Try the owner again Tuesday morning',
+    next_action_date: '2026-10-06'
+  });
+
+  assert.equal(res.status, 200, await res.clone().text());
+
+  const company = companyOf(env);
+  assert.equal(company.next_action, 'Try the owner again Tuesday morning');
+  assert.equal(company.next_action_date, '2026-10-06');
+  assert.equal(company.status, 'ACTIVE', 'scheduling a callback is not a suppression');
+});
+
+test('a quick drop with no callback leaves the existing one alone', async () => {
+  const env = envWithCompany({ confidence: 60 });
+  env.DB._raw.prepare('UPDATE companies SET next_action = ?, next_action_date = ? WHERE company_id = ?')
+    .run('Existing promise', '2026-09-30', 'acct-1');
+
+  const res = await postActivity(env, { company_id: 'acct-1', disposition: 'VM_NO_ANSWER', mode: 'PHONE' });
+  assert.equal(res.status, 200);
+
+  const company = companyOf(env);
+  assert.equal(company.next_action, 'Existing promise', 'a voicemail must not erase the plan');
+  assert.equal(company.next_action_date, '2026-09-30');
+});
+
+test('a quick drop with only one callback field updates only that field', async () => {
+  const env = envWithCompany({ confidence: 60 });
+  env.DB._raw.prepare('UPDATE companies SET next_action = ?, next_action_date = ? WHERE company_id = ?')
+    .run('Old text', '2026-09-30', 'acct-1');
+
+  // Text only: the date must survive.
+  const textOnly = await postActivity(env, {
+    company_id: 'acct-1',
+    disposition: 'VM_NO_ANSWER',
+    mode: 'PHONE',
+    next_action: 'New text'
+  });
+  assert.equal(textOnly.status, 200);
+  let company = companyOf(env);
+  assert.equal(company.next_action, 'New text');
+  assert.equal(company.next_action_date, '2026-09-30', 'a missing date must not null the stored one');
+
+  // Date only: the text must survive.
+  const dateOnly = await postActivity(env, {
+    company_id: 'acct-1',
+    disposition: 'VM_NO_ANSWER',
+    mode: 'PHONE',
+    next_action_date: '2026-12-01'
+  });
+  assert.equal(dateOnly.status, 200);
+  company = companyOf(env);
+  assert.equal(company.next_action, 'New text');
+  assert.equal(company.next_action_date, '2026-12-01');
+});
+
+test('an unparseable callback date is dropped rather than stored', async () => {
+  const env = envWithCompany({ confidence: 60 });
+
+  const res = await postActivity(env, {
+    company_id: 'acct-1',
+    disposition: 'VM_NO_ANSWER',
+    mode: 'PHONE',
+    next_action: 'Follow up',
+    next_action_date: 'next Tuesday'
+  });
+
+  assert.equal(res.status, 200);
+  const company = companyOf(env);
+  assert.equal(company.next_action, 'Follow up', 'the text is still useful');
+  assert.equal(company.next_action_date, null, 'but a garbage date would corrupt the ordering');
+});
+
+test('a wrong number disqualifies without also recording a callback', async () => {
+  const env = envWithCompany({ confidence: 60 });
+
+  // The two updates are mutually exclusive on purpose: a disqualified account
+  // must not be re-offered by the callback ordering it would otherwise land in.
+  const res = await postActivity(env, {
+    company_id: 'acct-1',
+    disposition: 'WRONG_NUMBER',
+    mode: 'PHONE',
+    next_action: 'Should not be stored',
+    next_action_date: '2026-10-06'
+  });
+
+  assert.equal(res.status, 200);
+  const company = companyOf(env);
+  assert.equal(company.status, 'DISQUALIFIED');
+  assert.equal(company.next_action, null);
+  assert.equal(company.next_action_date, null);
+});
+

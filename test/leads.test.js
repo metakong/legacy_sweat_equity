@@ -14,7 +14,8 @@ import path from 'node:path';
 
 import { app } from '../src/index.js';
 import { createD1 } from '../mockEnv.js';
-import { LEAD_LIMITS, CONFIDENCE_BANDS, LEAD_MODES, TRIAGE_MAX_CONFIDENCE, IMPORT_CONFIDENCE_SCORE, MAX_IMPORT_ROWS } from '../src/routes/leads.js';
+import { LEAD_LIMITS, CONFIDENCE_BANDS, LEAD_MODES, TRIAGE_MAX_CONFIDENCE, IMPORT_CONFIDENCE_SCORE, MAX_IMPORT_ROWS, FIELD_GEOHASH_PRECISION } from '../src/routes/leads.js';
+import { encodeGeohash, decodeGeohashBounds } from '../src/lib/geo.js';
 
 const AGENT = 'sean_deardorff@us.aflac.com';
 const OTHER_AGENT = 'someone_else@us.aflac.com';
@@ -39,11 +40,21 @@ function seed(db, rows) {
     INSERT INTO companies (
       company_id, agent_email, company_name, company_phone, decision_maker,
       confidence_score, status, street_1, city, state, lat, long,
-      current_voluntary_carrier, estimated_w2_count
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, '100 Main St', 'Springfield', 'MO', 37.2, -93.29, 'None', 12)
+      current_voluntary_carrier, estimated_w2_count, geohash,
+      next_action, next_action_date
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, '100 Main St', 'Springfield', 'MO', ?, ?, 'None', 12, ?, ?, ?)
   `);
 
   for (const row of rows) {
+    const lat = row.lat ?? 37.2;
+    const long = row.long ?? -93.29;
+    // Geohash is derived from the coordinates the same way the write path does,
+    // so a test that supplies lat/long is a test against the real spatial
+    // contract rather than a hand-typed hash that could never occur.
+    const geohash = row.geohash !== undefined
+      ? row.geohash
+      : encodeGeohash(lat, long, 7);
+
     insert.run(
       row.id,
       row.agent ?? AGENT,
@@ -51,7 +62,12 @@ function seed(db, rows) {
       row.phone ?? null,
       row.dm ?? null,
       row.confidence ?? 30,
-      row.status ?? 'ACTIVE'
+      row.status ?? 'ACTIVE',
+      lat,
+      long,
+      geohash,
+      row.next_action ?? null,
+      row.next_action_date ?? null
     );
   }
 }
@@ -442,3 +458,209 @@ test('disqualifying also removes the record from the phone queue', async () => {
   const after = await leadsFor('/api/leads?mode=PHONE', env);
   assert.equal(after.body.data.length, 0, 'a wrong number must never be dialed twice');
 });
+
+// ---------------------------------------------------------------------
+// Sprint 6 — actionable callbacks in the PHONE queue
+// ---------------------------------------------------------------------
+
+/** The Monday stack order, as company ids. */
+async function phoneOrder(env) {
+  const { body } = await leadsFor('/api/leads?mode=PHONE', env);
+  return body.data.map((row) => row.company_id);
+}
+
+test('a due callback is hoisted above a higher-confidence cold account', async () => {
+  const env = { DB: createD1(tempDbPath()) };
+  const today = new Date().toISOString().slice(0, 10);
+
+  seed(env.DB, [
+    // Highest confidence in the band, but nobody is expecting the call.
+    { id: 'cold-90', name: 'Zulu Cold Co', confidence: 79 },
+    { id: 'cold-70', name: 'Yankee Cold Co', confidence: 70 },
+    // The commitment the agent actually made.
+    {
+      id: 'due-40',
+      name: 'Alpha Callback Co',
+      confidence: 40,
+      next_action: 'Call Dana back about the Section 125 numbers',
+      next_action_date: today
+    }
+  ]);
+
+  const { body } = await leadsFor('/api/leads?mode=PHONE', env);
+
+  assert.equal(body.data.length, 3, 'a due callback is a priority, not a filter');
+  assert.equal(body.data[0].company_id, 'due-40', 'the promise outranks the score');
+  assert.equal(body.data[0].next_action, 'Call Dana back about the Section 125 numbers');
+  assert.equal(body.data[0].next_action_date, today);
+  // Within each tier the old confidence-first order must survive, otherwise the
+  // dialer's sequence would shuffle between reloads.
+  assert.deepEqual(body.data.slice(1).map((row) => row.company_id), ['cold-90', 'cold-70']);
+});
+
+test('a future callback is not promoted above a dialable account', async () => {
+  const env = { DB: createD1(tempDbPath()) };
+  const now = Date.now();
+
+  seed(env.DB, [
+    {
+      id: 'future',
+      name: 'Aardvark Next Week',
+      // Same confidence band, but its commitment has not come due.
+      confidence: 35,
+      next_action_date: new Date(now + 7 * 86400000).toISOString().slice(0, 10)
+    },
+    // No callback at all, but a much better score. It must win.
+    { id: 'ready', name: 'Zebra Ready Now', confidence: 79 }
+  ]);
+
+  const order = await phoneOrder(env);
+
+  assert.deepEqual(
+    order,
+    ['ready', 'future'],
+    'a future promise is still just a low-confidence account until the day it lands'
+  );
+});
+
+test('two due callbacks fall back to confidence, then name', async () => {
+  const env = { DB: createD1(tempDbPath()) };
+  const today = new Date().toISOString().slice(0, 10);
+
+  seed(env.DB, [
+    { id: 'b', name: 'Bravo Due', confidence: 55, next_action_date: today },
+    { id: 'a', name: 'Alpha Due', confidence: 55, next_action_date: today },
+    { id: 'hi', name: 'Zulu Due', confidence: 77, next_action_date: today }
+  ]);
+
+  assert.deepEqual(
+    await phoneOrder(env),
+    ['hi', 'a', 'b'],
+    'the promotion is a tier, and the old tie-breaks still order inside it'
+  );
+});
+
+test('an overdue callback sorts with the due ones, ahead of cold accounts', async () => {
+  const env = { DB: createD1(tempDbPath()) };
+  const earlier = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+
+  seed(env.DB, [
+    { id: 'cold', name: 'Bravo Cold Co', confidence: 79 },
+    { id: 'overdue', name: 'Charlie Overdue Co', confidence: 31, next_action_date: earlier }
+  ]);
+
+  const order = await phoneOrder(env);
+
+  assert.equal(order[0], 'overdue', 'CURRENT_DATE is a floor, not an exact match');
+});
+
+test('the callback columns are returned and never invented', async () => {
+  const env = { DB: createD1(tempDbPath()) };
+  seed(env.DB, [{ id: 'plain', name: 'No Commitment Co', confidence: 50 }]);
+
+  const { body } = await leadsFor('/api/leads?mode=PHONE', env);
+
+  assert.equal(body.data[0].next_action, null);
+  assert.equal(body.data[0].next_action_date, null);
+});
+
+test('the partial callback index exists and the ordering is portable', async () => {
+  const env = { DB: createD1(tempDbPath()) };
+  const today = new Date().toISOString().slice(0, 10);
+
+  seed(env.DB, [
+    { id: 'high', name: 'High Score', confidence: 78 },
+    { id: 'due', name: 'Due Callback', confidence: 30, next_action_date: today }
+  ]);
+
+  const index = env.DB._raw.prepare(
+    `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_companies_callback'`
+  ).get();
+  assert.ok(index, 'idx_companies_callback must exist for a due-callback lookup');
+
+  assert.equal((await phoneOrder(env))[0], 'due');
+});
+
+// ---------------------------------------------------------------------
+// Sprint 6 — density-first FIELD proximity
+// ---------------------------------------------------------------------
+
+test('FIELD with lat/lng filters to the 5-character geohash cell', async () => {
+  const env = { DB: createD1(tempDbPath()) };
+
+  // The agent is standing here.
+  const here = { lat: 37.2089, long: -93.2923 };
+  const cell = encodeGeohash(here.lat, here.long, FIELD_GEOHASH_PRECISION);
+
+  // A near account inside the corridor, and one on the far side of the metro.
+  seed(env.DB, [
+    { id: 'near', name: 'Alpha Next Door', confidence: 90, lat: 37.2092, long: -93.2915 },
+    { id: 'far', name: 'Zulu Across Town', confidence: 95, lat: 37.0850, long: -93.3620 }
+  ]);
+
+  const before = await leadsFor('/api/leads?mode=FIELD', env);
+  assert.equal(before.body.data.length, 2, 'unfenced FIELD still returns the whole metro');
+  assert.equal(before.body.geo_filter, false);
+  assert.equal(before.body.geohash, null);
+
+  const { body } = await leadsFor(`/api/leads?mode=FIELD&lat=${here.lat}&lng=${here.long}`, env);
+
+  assert.equal(body.geo_filter, true);
+  assert.equal(body.geohash, cell);
+  assert.equal(body.geohash.length, FIELD_GEOHASH_PRECISION);
+  assert.deepEqual(
+    body.data.map((row) => row.company_id),
+    ['near'],
+    'a scattered account must not be routed into a walking corridor'
+  );
+});
+
+test('an invalid or missing fix degrades to an unfenced field list, never an error', async () => {
+  const env = { DB: createD1(tempDbPath()) };
+  seed(env.DB, [{ id: 'only', name: 'Only Lead', confidence: 90, lat: 37.2, long: -93.29 }]);
+
+  for (const query of [
+    '?mode=FIELD&lat=abc&lng=-93.29',
+    '?mode=FIELD&lat=&lng=',
+    '?mode=FIELD&lat=999&lng=-93.29',
+    '?mode=FIELD'
+  ]) {
+    const { status, body } = await leadsFor(`/api/leads${query}`, env);
+    assert.equal(status, 200, query);
+    assert.equal(body.geo_filter, false, `no fence for ${query}`);
+    assert.equal(body.data.length, 1, `the list is never blanked by ${query}`);
+  }
+});
+
+test('the PHONE queue ignores lat/lng and still returns the whole metro', async () => {
+  const env = { DB: createD1(tempDbPath()) };
+  seed(env.DB, [
+    { id: 'a', name: 'Alpha', confidence: 50, lat: 37.209, long: -93.292 },
+    { id: 'b', name: 'Zulu', confidence: 50, lat: 37.085, long: -93.362 }
+  ]);
+
+  const { body } = await leadsFor('/api/leads?mode=PHONE&lat=37.2089&lng=-93.2923', env);
+
+  assert.equal(body.data.length, 2, 'a phone list is worked from a chair, not a doorstep');
+  assert.equal(body.geo_filter, false);
+});
+
+test('the five-character cell really is the ~3-mile corridor the spec asks for', async () => {
+  // Measured from the encoder's own bounds rather than a hand-picked point, so
+  // this documents the precision choice instead of one lucky sample.
+  const bounds = decodeGeohashBounds(encodeGeohash(37.2089, -93.2923, FIELD_GEOHASH_PRECISION));
+  const latMiles = bounds.latitudeSpan * 69;
+  const lonMiles = bounds.longitudeSpan * 69 * Math.cos((37.2089 * Math.PI) / 180);
+
+  assert.ok(latMiles > 2 && latMiles < 4, `north-south cell is ${latMiles.toFixed(2)} mi`);
+  assert.ok(lonMiles > 2 && lonMiles < 4, `east-west cell is ${lonMiles.toFixed(2)} mi`);
+
+  // And the fence is real: a cross-town account shares no five-character prefix.
+  // (Only the FULL prefix differs — at two characters both are still "9y",
+  // which is exactly why a coarse cell would not fence anything.)
+  const here = encodeGeohash(37.2089, -93.2923, FIELD_GEOHASH_PRECISION);
+  const acrossTown = encodeGeohash(37.0850, -93.3620, FIELD_GEOHASH_PRECISION);
+  assert.equal(here.slice(0, 2), acrossTown.slice(0, 2), 'the metro shares a coarse cell');
+  assert.notEqual(here, acrossTown, 'but the five-character corridor separates them');
+});
+

@@ -2746,6 +2746,69 @@ body:not([data-agency-shell="active"]) .agency-views { display: none; }
 .canvass-stop-address { font-size: 0.78rem; color: var(--text-muted); }
 .canvass-stop-meta { font-size: 0.74rem; font-weight: 600; color: var(--accent-gold); }
 
+/* Sprint 6 — the doorstep line. Deliberately the loudest text on the card:
+   it is the one number the agent says out loud. */
+.canvass-stop-hook {
+  margin-top: 0.2rem;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--success, #35d07f);
+}
+
+.canvass-stop-callback {
+  margin-top: 0.15rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--warning);
+}
+
+/* ── Field Mode — micro-radar (native SVG) ────────── */
+.canvass-radar-host:empty { display: none; }
+
+.canvass-radar-card {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  background: var(--bg-card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.canvass-radar {
+  width: 116px;
+  height: 116px;
+  flex: 0 0 116px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.canvass-radar-path {
+  fill: none;
+  stroke: var(--accent-gold);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  /* The radar is an orientation aid, not a scale drawing. */
+  opacity: 0.75;
+}
+
+.canvass-radar-stop {
+  fill: var(--accent);
+  stroke: var(--bg-card);
+  stroke-width: 1.5;
+}
+
+/* The first stop is where the agent is right now. */
+.canvass-radar-start { fill: var(--success, #35d07f); }
+
+.canvass-radar-caption {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
 .canvass-launch {
   display: block;
   margin-top: 0.7rem;

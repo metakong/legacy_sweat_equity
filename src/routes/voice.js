@@ -186,6 +186,16 @@ export async function handleVoiceDebrief(c) {
     if (companyId) {
       // COALESCE semantics: the model returns null for everything it could not
       // confirm, and a null must never erase intelligence the agent already has.
+      //
+      // Sprint 6 adds the callback columns. They cannot use COALESCE — COALESCE
+      // protects against a NULL column, but the failure mode here is different:
+      // a debrief that confirms a carrier but mentions no callback would send
+      // NULL and CLEAR a callback the agent set on a previous call. So the
+      // presence flags below do the work instead: the extractor reports whether
+      // it actually heard a commitment, and only that answer may overwrite.
+      const hasNextAction = extracted.next_action && extracted.next_action !== 'NONE' ? 1 : 0;
+      const hasNextActionDate = extracted.next_action_date ? 1 : 0;
+
       statements.push(c.env.DB.prepare(`
         UPDATE companies SET
           confidence_score          = ?,
@@ -195,6 +205,8 @@ export async function handleVoiceDebrief(c) {
           major_medical_carrier     = COALESCE(?, major_medical_carrier),
           is_hdhp                   = COALESCE(?, is_hdhp),
           estimated_w2_count        = COALESCE(?, estimated_w2_count),
+          next_action               = CASE WHEN ? = 1 THEN ? ELSE next_action END,
+          next_action_date          = CASE WHEN ? = 1 THEN ? ELSE next_action_date END,
           status                    = CASE WHEN ? = 1 THEN 'DISQUALIFIED' ELSE status END
         WHERE company_id = ? AND agent_email = ?
       `).bind(
@@ -205,6 +217,10 @@ export async function handleVoiceDebrief(c) {
         extracted.major_medical_carrier,
         extracted.is_hdhp === null ? null : (extracted.is_hdhp ? 1 : 0),
         extracted.estimated_w2_count,
+        hasNextAction,
+        extracted.next_action,
+        hasNextActionDate,
+        extracted.next_action_date,
         isDisqualified ? 1 : 0,
         companyId,
         userEmail

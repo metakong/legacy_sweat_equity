@@ -40,6 +40,32 @@ export const BLOCK_LABELS = ['🌅 Morning', '☀️ Midday', '🌇 Afternoon', 
 const EARTH_RADIUS_METERS = 6371008.8;
 
 /**
+ * Section 125 FICA recapture — the single number worth saying on a doorstep.
+ *
+ * $1,500 of average annual premium at the 7.65% employer FICA rate, applied to
+ * every W-2 the owner writes a check for. The conservative estimate in
+ * ficaRecaptureEstimates() discounts for participation; this is the ceiling
+ * case the pitch hook quotes.
+ */
+export const FICA_ANNUAL_PREMIUM = 1500;
+export const FICA_RATE = 0.0765;
+
+/**
+ * The vivid one-liner the canvass card leads with.
+ *
+ * Returns null rather than "$0/yr" for a company with no reported headcount: a
+ * pitch that says "saves ~$0" is worse than one that says nothing, because the
+ * agent has to explain a number that is obviously not a saving.
+ */
+export function ficaPitchHook(lives) {
+  const count = Number.isFinite(Number(lives)) && Number(lives) > 0 ? Math.floor(Number(lives)) : 0;
+  if (!count) return null;
+  const savings = Number(((count * FICA_ANNUAL_PREMIUM * FICA_RATE) / 1).toFixed(0));
+  return { lives: count, savings, text: `Pitch Hook: Saves Owner ~$${savings.toLocaleString('en-US')}/yr in FICA taxes` };
+}
+
+
+/**
  * True when a lead can actually be driven to.
  *
  * Number(null) is 0, so the obvious Number.isFinite(Number(lat)) check would
@@ -264,6 +290,156 @@ export function ficaRecaptureEstimates(lives) {
   };
 }
 
+// ---------------------------------------------------------------------
+// MICRO-RADAR (native SVG, zero dependencies)
+// ---------------------------------------------------------------------
+
+/** Radius of a plotted stop, in the 0-100 viewBox. */
+export const RADAR_POINT_RADIUS = 3.2;
+
+/** Padding from the viewBox edge so a marker is never half cut off. */
+const RADAR_PADDING = 8;
+
+/**
+ * Project a set of stops into 0-100 SVG coordinates.
+ *
+ * WHY MIN/MAX AND NOT A MERCATOR PROJECTION
+ * At a 3-mile scale over a handful of stops the curvature is invisible and the
+ * only thing that matters is the RELATIVE arrangement — which stop is north of
+ * which. A linear min/max normalization preserves exactly that, costs four
+ * comparisons per axis, and cannot blow up on a zero-span route (every stop on
+ * one street), which is the case a naive (value - min) / span would divide by
+ * zero on.
+ *
+ * Latitude grows north and SVG `y` grows DOWN, so the axis is inverted. Without
+ * that the radar would render the route upside down.
+ *
+ * @returns {Array<{stop: object, cx: number, cy: number}>}
+ */
+export function projectStopsToRadar(stops) {
+  const points = (Array.isArray(stops) ? stops : []).filter(hasCoordinates);
+  if (points.length === 0) return [];
+
+  const lats = points.map((stop) => Number(stop.lat));
+  const longs = points.map((stop) => Number(stop.long));
+
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLong = Math.min(...longs);
+  const maxLong = Math.max(...longs);
+
+  const latSpan = maxLat - minLat;
+  const longSpan = maxLong - minLong;
+  const usable = 100 - RADAR_PADDING * 2;
+
+  return points.map((stop) => {
+    // A zero span means every stop shares that coordinate, so the route is a
+    // straight line; pinning it to the centre is the honest rendering.
+    const xRatio = longSpan === 0 ? 0.5 : (Number(stop.long) - minLong) / longSpan;
+    const yRatio = latSpan === 0 ? 0.5 : (Number(stop.lat) - minLat) / latSpan;
+
+    return {
+      stop,
+      cx: Number((RADAR_PADDING + xRatio * usable).toFixed(2)),
+      cy: Number((RADAR_PADDING + (1 - yRatio) * usable).toFixed(2))
+    };
+  });
+}
+
+/**
+ * Build the route radar as a plain SVG element.
+ *
+ * `document.createElementNS` is required — an SVG child created with
+ * createElement() lands in the HTML namespace and silently never renders. The
+ * namespace is looked up at call time rather than at module scope so this file
+ * still imports cleanly under Node for its own tests.
+ */
+export function buildRouteRadar(stops, { label = 'Route radar' } = {}) {
+  const projected = projectStopsToRadar(stops);
+  if (projected.length === 0) return null;
+
+  const svgNs = typeof document !== 'undefined' && typeof document.createElementNS === 'function'
+    ? document.createElementNS.bind(document)
+    : null;
+  if (!svgNs) return null;
+
+  const svg = svgNs('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 100 100');
+  svg.setAttribute('class', 'canvass-radar');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', `${label}: ${projected.length} stops`);
+
+  const polyline = svgNs('http://www.w3.org/2000/svg', 'polyline');
+  polyline.setAttribute('class', 'canvass-radar-path');
+  polyline.setAttribute('points', projected.map(({ cx, cy }) => `${cx},${cy}`).join(' '));
+  svg.append(polyline);
+
+  projected.forEach(({ cx, cy, stop }, index) => {
+    const circle = svgNs('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('class', index === 0 ? 'canvass-radar-stop canvass-radar-start' : 'canvass-radar-stop');
+    circle.setAttribute('cx', String(cx));
+    circle.setAttribute('cy', String(cy));
+    circle.setAttribute('r', String(RADAR_POINT_RADIUS));
+    circle.setAttribute('data-radar-stop', String(index + 1));
+    if (stop?.company_name) circle.setAttribute('data-company', String(stop.company_name));
+    svg.append(circle);
+  });
+
+  return svg;
+}
+
+/**
+ * Ask the device where we are. NEVER rejects.
+ *
+ * A denied permission, an unsupported browser, or a weak-signal timeout all
+ * resolve to null, because the canvass list must still render: the geohash
+ * fence is an enhancement, and a field agent standing in a warehouse with no
+ * bars is precisely the user this view exists for.
+ *
+ * @returns {Promise<{lat: number, long: number}|null>}
+ */
+export function resolveCurrentPosition({ geolocation, timeout = 10000 } = {}) {
+  const source = geolocation
+    || (typeof navigator !== 'undefined' ? navigator.geolocation : null);
+
+  if (!source || typeof source.getCurrentPosition !== 'function') {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    try {
+      source.getCurrentPosition(
+        (position) => {
+          const lat = Number(position?.coords?.latitude);
+          const long = Number(position?.coords?.longitude);
+          finish(
+            Number.isFinite(lat) && Number.isFinite(long) ? { lat, long } : null
+          );
+        },
+        () => finish(null),
+        { enableHighAccuracy: true, timeout, maximumAge: 60000 }
+      );
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+/** Build the FIELD query string, including the fix when one exists. */
+export function buildFieldLeadsUrl(fix, base = LEADS_ENDPOINT) {
+  const lat = Number(fix?.lat);
+  const long = Number(fix?.long);
+  if (!Number.isFinite(lat) || !Number.isFinite(long)) return `${base}?mode=FIELD`;
+  return `${base}?mode=FIELD&lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(long)}`;
+}
+
 async function requestJson(url, { fetchImpl } = {}) {
   const doFetch = fetchImpl || (typeof fetch === 'function' ? fetch : null);
   if (!doFetch) throw new Error('network unavailable');
@@ -277,24 +453,33 @@ async function requestJson(url, { fetchImpl } = {}) {
 
 /**
  * @param {Element} container
- * @param {{fetchImpl?: Function, origin?: {lat: number, long: number}}} [options]
+ * @param {{
+ *   fetchImpl?: Function,
+ *   origin?: {lat: number, long: number},
+ *   geolocation?: object,
+ *   position?: {lat: number, long: number}
+ * }} [options]
  * @returns {Function} teardown
  */
 export function mountCanvassView(container, options = {}) {
-  const { fetchImpl, origin } = options;
+  const { fetchImpl, origin, geolocation, position: injectedPosition } = options;
 
   let stops = [];
   let blocks = [];
   let destroyed = false;
   let voiceWidget = null;
+  // The fix resolved on mount. null means "no permission / no fix", in which
+  // case the field list is loaded unfenced rather than not at all.
+  let position = injectedPosition || null;
 
   const root = el('div', { className: 'canvass-view' });
   const status = el('p', {
     className: 'canvass-status',
     attrs: { role: 'status', 'aria-live': 'polite' }
   });
+  const radarHost = el('div', { className: 'canvass-radar-host' });
   const routeHost = el('div', { className: 'canvass-blocks' });
-  root.append(status, routeHost);
+  root.append(status, radarHost, routeHost);
   container.replaceChildren(root);
 
   const setStatus = (message) => { status.textContent = message || ''; };
@@ -304,6 +489,7 @@ export function mountCanvassView(container, options = {}) {
 
     for (const stop of block.stops) {
       const fica = ficaRecaptureEstimates(stop.estimated_w2_count);
+      const hook = ficaPitchHook(stop.estimated_w2_count);
       const address = [stop.street_1, stop.city, stop.state].filter(Boolean).join(', ');
 
       const metaBits = [
@@ -318,8 +504,18 @@ export function mountCanvassView(container, options = {}) {
         children: [
           el('span', { className: 'canvass-stop-name', text: stop.company_name || 'Unknown account' }),
           el('span', { className: 'canvass-stop-address', text: address }),
-          el('span', { className: 'canvass-stop-meta', text: metaBits.join(' · ') })
-        ]
+          el('span', { className: 'canvass-stop-meta', text: metaBits.join(' · ') }),
+          // The doorstep line. Rendered only when there is a real headcount to
+          // multiply — see ficaPitchHook for why "$0 saved" is worse than
+          // silence.
+          hook ? el('span', { className: 'canvass-stop-hook', text: hook.text }) : null,
+          stop.next_action_date
+            ? el('span', {
+              className: 'canvass-stop-callback',
+              text: `📞 ${stop.next_action_date}: ${stop.next_action || 'callback promised'}`
+            })
+            : null
+        ].filter(Boolean)
       }));
     }
 
@@ -347,15 +543,48 @@ export function mountCanvassView(container, options = {}) {
     });
   }
 
+  /**
+   * Draw the micro-radar for the first route chunk.
+   *
+   * Only the first block is plotted: ten markers is what fits legibly in a
+   * 100x100 box, and the agent is driving the first chunk right now. A radar
+   * that tried to show all thirty would be pretty and useless.
+   */
+  function renderRadar() {
+    radarHost.replaceChildren();
+
+    const firstBlock = blocks[0];
+    if (!firstBlock) return;
+
+    const radar = buildRouteRadar(firstBlock.stops, { label: firstBlock.label });
+    if (!radar) return;
+
+    radarHost.append(
+      el('div', {
+        className: 'canvass-radar-card',
+        children: [
+          radar,
+          el('span', {
+            className: 'canvass-radar-caption',
+            text: `${firstBlock.label} · ${firstBlock.stops.filter(hasCoordinates).length} of ${firstBlock.stops.length} stops plotted`
+          })
+        ]
+      })
+    );
+  }
+
   function render() {
     if (voiceWidget) { voiceWidget.destroy(); voiceWidget = null; }
 
     if (stops.length === 0) {
+      radarHost.replaceChildren();
       routeHost.replaceChildren(el('div', {
         className: 'agency-empty',
         children: [
           el('h2', { text: 'No canvass targets' }),
-          el('p', { text: 'No accounts at 80+ confidence yet. Verify leads on the phone first, or import targets in 📋 Triage.' })
+          el('p', { text: position
+            ? 'No accounts at 80+ confidence within your immediate cell. Widen the drive or verify more leads on the phone.'
+            : 'No accounts at 80+ confidence yet. Verify leads on the phone first, or import targets in 📋 Triage.' })
         ]
       }));
       return;
@@ -371,6 +600,8 @@ export function mountCanvassView(container, options = {}) {
       onSaved: () => setStatus('Field debrief queued — transcribes when online.')
     });
 
+    renderRadar();
+
     routeHost.replaceChildren(
       el('p', {
         className: 'canvass-summary',
@@ -382,19 +613,35 @@ export function mountCanvassView(container, options = {}) {
   }
 
   async function load() {
-    setStatus('Loading today’s canvass route…');
+    setStatus('Locating and loading today’s canvass route…');
+
+    // Resolve the fix BEFORE the fetch so the geohash fence travels with the
+    // very first request. A denied prompt still yields null, and the list is
+    // then loaded unfenced — never blanked.
+    if (!position) {
+      position = await resolveCurrentPosition({ geolocation });
+    }
+
     try {
-      const payload = await requestJson(`${LEADS_ENDPOINT}?mode=FIELD`, { fetchImpl });
+      const payload = await requestJson(buildFieldLeadsUrl(position), { fetchImpl });
       const leads = Array.isArray(payload?.data) ? payload.data : [];
 
-      stops = orderStopsTwoOpt(leads, origin);
+      // A fenced response whose own cell came back empty may be a stale fix;
+      // retry once without the fence so the agent is not shown an empty day
+      // because of a bad GPS reading.
+      const usable = leads.length > 0 || !payload?.geo_filter
+        ? leads
+        : await retryWithoutFence();
+
+      stops = orderStopsTwoOpt(usable, origin);
       blocks = splitRouteBlocks(stops);
-      setStatus('');
+      setStatus(position ? '' : 'Location unavailable — showing all field targets.');
       render();
     } catch (err) {
       console.error('Agency OS canvass load failed:', err);
       stops = [];
       blocks = [];
+      radarHost.replaceChildren();
       routeHost.replaceChildren(el('div', {
         className: 'agency-empty',
         children: [
@@ -403,6 +650,16 @@ export function mountCanvassView(container, options = {}) {
         ]
       }));
       setStatus('');
+    }
+  }
+
+  /** One unbounded retry. A network failure here is not worth a second error card. */
+  async function retryWithoutFence() {
+    try {
+      const fallback = await requestJson(`${LEADS_ENDPOINT}?mode=FIELD`, { fetchImpl });
+      return Array.isArray(fallback?.data) ? fallback.data : [];
+    } catch {
+      return [];
     }
   }
 
