@@ -8,6 +8,68 @@
 
 ---
 
+## 2026-09-13 21:30 UTC (2026-09-13 16:30 CDT) — Codebase Hardening: Zero Trust Auth, OAuth Constant-Time Validation, Multi-Tenant SQL Isolation, Unified Sync Architecture & Keyset Pagination
+
+### Summary
+Executed the comprehensive 4-phase codebase hardening and vulnerability remediation protocol across edge backend and client-side PWA:
+1. Enforced Zero Trust API authentication and constant-time OAuth secret validation.
+2. Eliminated repository secrets (`mapbox_token.txt`).
+3. Enforced strict multi-tenant SQL isolation across accounts and contacts in `src/lib/db.js`.
+4. Unified client-side offline sync between `AgencyOS_DB` and `AflacProspectDB` with client-generated UUIDs and real-time sync badge updates.
+5. Implemented keyset pagination (`WHERE company_id > ?`) for `POST /api/admin/reclassify-industries` to mitigate Cloudflare Worker CPU/subrequest limits.
+
+### Specific Changes to `src/lib/db.js` (Rollback Reference)
+- **File:** `src/lib/db.js` (lines 712-723 in `ACTIVITY_SELECT`)
+- **Isolation Fix Applied:**
+  1. Updated `JOIN companies c ON c.company_id = a.company_id` to `JOIN companies c ON c.company_id = a.company_id AND c.agent_email = a.agent_email`.
+  2. Updated correlated contact lookup subquery `SELECT contact_id FROM contacts z WHERE z.company_id = a.company_id` to include `AND z.agent_email = a.agent_email`.
+  3. Added `AND ct.agent_email = a.agent_email` to `LEFT JOIN contacts ct ON ct.contact_id = COALESCE(...)`.
+- **Rollback Instructions:**
+  To revert `ACTIVITY_SELECT` in `src/lib/db.js`, restore lines 712-723 to:
+  ```javascript
+    FROM activity_logs a
+    JOIN companies c ON c.company_id = a.company_id
+    LEFT JOIN contacts ct ON ct.contact_id = COALESCE(
+      a.contact_id,
+      (SELECT contact_id FROM contacts z
+       WHERE z.company_id = a.company_id
+       ORDER BY z.is_primary_dm DESC LIMIT 1)
+    )
+  ```
+
+### Detailed Phase-by-Phase Actions
+1. **Phase 1: Zero Trust Auth & Security Patching (`src/index.js`, `src/routes/oauth.js`)**:
+   - Eliminated hardcoded email fallback (`const finalEmail = jwtEmail || 'sean_deardorff@us.aflac.com';`).
+   - Enforced strict 401 Unauthorized when `cf-access-jwt-assertion` is missing, invalid, or email is not in `ALLOWED_USERS`.
+   - Implemented `timingSafeEqual()` constant-time comparison against bitwise XOR differences across full buffers in `src/routes/oauth.js` to eliminate timing side-channels during token issuance.
+   - Validated `client_id` and `client_secret` via `Authorization: Basic` or request body before token issuance.
+   - Permanently deleted plaintext `mapbox_token.txt` and updated `scripts/geocode-db-sync.js` to read from `process.env.MAPBOX_TOKEN`.
+   - Updated `dev-server.js` to inject a default development assertion when local proxying without Cloudflare Access.
+   - Created `test/test-auth.js` exporting signed test assertions and headers.
+
+2. **Phase 2: Multi-Tenant SQL Isolation (`src/lib/db.js`)**:
+   - Enforced `AND c.agent_email = a.agent_email`, `AND z.agent_email = a.agent_email`, and `AND ct.agent_email = a.agent_email` on all joins and subqueries in `ACTIVITY_SELECT`.
+   - Added unit test asserting cross-tenant contacts are strictly excluded from activity queries.
+
+3. **Phase 3: IndexedDB Unified Sync Architecture (`public/app/store.js`, `public/app/modules/state.js`)**:
+   - Explicitly deprecated legacy `AgencyOS_DB` in favor of `AflacProspectDB`.
+   - Updated `enqueueAudio` and `enqueueAction` to generate strict client-side UUIDs (`crypto.randomUUID()`) for idempotency.
+   - Routed all client queue entries into `AflacProspectDB`'s `queue` store with `type: 'voice_debrief'` and `type: 'quick_action'`, while preserving dual-write compatibility for legacy Service Worker background sync.
+   - Registered `window.updatePendingBadge` and `'aflac:sync-badge-update'` custom event listener so queue operations immediately reflect on the `#syncCount` UI badge.
+   - Updated `syncQueue()` in `store.js` to handle both `voice_debrief` (`POST /api/voice-debrief`) and `quick_action` (`POST /api/activity`) payloads with proper error status handling and automatic badge re-renders.
+
+4. **Phase 4: Edge Limit Mitigation & Keyset Pagination (`src/index.js`)**:
+   - Refactored `POST /api/admin/reclassify-industries` to replace unbounded queries with keyset pagination (`WHERE company_id > ? ORDER BY company_id ASC LIMIT ?`).
+   - Clamped batch `limit` to maximum 25 (default 10) to protect Cloudflare Worker CPU/subrequest limits.
+   - Added optional `company_ids` filter and `only_unclassified` boolean toggle (default true).
+   - Added `cursor`, `next_cursor`, `has_more`, and `limit` to response payload for transparent paging.
+   - Added automated unit test verifying keyset pagination progression, cursor advancement, and limit clamping against real SQLite.
+
+### Verification
+- Full test suite passes: 360 tests passing, 0 failing (`npm test`).
+
+---
+
 ## 2026-09-13 17:21 UTC (2026-09-13 12:21 CDT) — Production Deployment & Edge Verification (MCP & RFC 8414 OAuth)
 
 ### Summary

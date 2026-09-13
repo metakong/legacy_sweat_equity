@@ -709,7 +709,7 @@ export const ACTIVITY_SELECT = `
     c.created_at AS company_created_at,
     ct.first_name, ct.last_name, ct.job_title, ct.phone_number, ct.email_address
   FROM activity_logs a
-  JOIN companies c ON c.company_id = a.company_id
+  JOIN companies c ON c.company_id = a.company_id AND c.agent_email = a.agent_email
   -- Fall back to the account's primary decision maker when the touch itself
   -- names no one. A silent 3-tap log carries no contact_id, and without this
   -- the Tier 1 clipboard row pastes blank Name/Phone/Email columns for an
@@ -717,7 +717,7 @@ export const ACTIVITY_SELECT = `
   LEFT JOIN contacts ct ON ct.contact_id = COALESCE(
     a.contact_id,
     (SELECT contact_id FROM contacts z
-     WHERE z.company_id = a.company_id
+     WHERE z.company_id = a.company_id AND z.agent_email = a.agent_email
      ORDER BY z.is_primary_dm DESC LIMIT 1)
-  )
+  ) AND ct.agent_email = a.agent_email
 `;

@@ -22,6 +22,10 @@ const MODE_STORAGE_KEY = 'agency_os_mode';
 /** Fired on window whenever the store changes. */
 export const STATE_CHANGE_EVENT = 'agency-os:statechange';
 
+/**
+ * @deprecated AgencyOS_DB is deprecated in favor of unified AflacProspectDB.
+ * Retained for backward-compatibility with Service Worker background sync.
+ */
 export const AUDIO_DB_NAME = 'AgencyOS_DB';
 // Bumped to 2 when the action outbox landed. An existing v1 database upgrades in
 // place — onupgradeneeded creates only the store that is missing — so a phone
@@ -280,6 +284,56 @@ export function requestBackgroundSync(tag = SYNC_TAG) {
   }
 }
 
+function triggerSyncBadgeUpdate() {
+  try {
+    if (typeof window !== 'undefined') {
+      if (typeof window.updatePendingBadge === 'function') {
+        window.updatePendingBadge();
+      }
+      window.dispatchEvent(new CustomEvent('aflac:sync-badge-update'));
+    }
+  } catch {}
+}
+
+async function writeToAflacQueue(item) {
+  try {
+    const factory = idbFactory();
+    if (!factory) return null;
+    return new Promise((resolve) => {
+      let req;
+      try {
+        req = factory.open('AflacProspectDB', 2);
+      } catch {
+        return resolve(null);
+      }
+      req.onupgradeneeded = (ev) => {
+        const db = ev.target.result;
+        if (!db.objectStoreNames.contains('queue')) {
+          db.createObjectStore('queue', { keyPath: 'log_id' });
+        }
+      };
+      req.onsuccess = (ev) => {
+        try {
+          const db = ev.target.result;
+          if (!db.objectStoreNames.contains('queue')) return resolve(null);
+          const tx = db.transaction(['queue'], 'readwrite');
+          tx.objectStore('queue').put(item);
+          tx.oncomplete = () => {
+            triggerSyncBadgeUpdate();
+            resolve(item.log_id);
+          };
+          tx.onerror = () => resolve(null);
+        } catch {
+          resolve(null);
+        }
+      };
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Write one capture to the outbox.
  *
@@ -291,7 +345,9 @@ export async function enqueueAudio(blob, metadata = {}) {
     throw new TypeError('enqueueAudio requires a non-empty Blob');
   }
 
+  const logId = metadata?.log_id || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `log_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const record = Object.freeze({
+    log_id: logId,
     blob,
     company_id: normalizeCompanyId(metadata?.company_id),
     mode: MODES.includes(metadata?.mode) ? metadata.mode : getState().mode,
@@ -317,9 +373,21 @@ export async function enqueueAudio(blob, metadata = {}) {
     tx.onabort = () => reject(tx.error || new Error('audio_outbox write aborted'));
   });
 
+  // Dual-write to unified AflacProspectDB queue with strict client-generated UUID
+  await writeToAflacQueue({
+    log_id: logId,
+    type: 'voice_debrief',
+    blob,
+    audioBlob: blob,
+    company_id: record.company_id,
+    mode: record.mode,
+    timestamp: record.timestamp
+  });
+
   // Fire-and-forget on purpose: the capture is already durable, so scheduling
   // the background drain must never delay (or fail) the promise the UI awaits.
   requestBackgroundSync();
+  triggerSyncBadgeUpdate();
 
   return saved;
 }
@@ -484,7 +552,9 @@ export async function enqueueAction(payload = {}) {
   const disposition = typeof payload?.disposition === 'string' ? payload.disposition.trim().toUpperCase() : '';
   if (!disposition) throw new TypeError('enqueueAction requires a disposition');
 
+  const logId = payload?.log_id || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `action_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const record = Object.freeze({
+    log_id: logId,
     company_id: companyId,
     disposition,
     mode: MODES.includes(payload?.mode) ? payload.mode : getState().mode,
@@ -518,9 +588,22 @@ export async function enqueueAction(payload = {}) {
     tx.onabort = () => reject(tx.error || new Error('action_outbox write aborted'));
   });
 
+  // Dual-write to unified AflacProspectDB queue with strict client-generated UUID
+  await writeToAflacQueue({
+    log_id: logId,
+    type: 'quick_action',
+    company_id: record.company_id,
+    disposition: record.disposition,
+    mode: record.mode,
+    next_action: record.next_action,
+    next_action_date: record.next_action_date,
+    timestamp: record.timestamp
+  });
+
   // Same fire-and-forget contract as enqueueAudio: the tap is already durable
   // and the browser is simply asked to remember to drain it later.
   requestBackgroundSync();
+  triggerSyncBadgeUpdate();
 
   return saved;
 }

@@ -16,6 +16,7 @@ import { app } from '../src/index.js';
 import { createD1 } from '../mockEnv.js';
 import { QUICK_DROP_DISPOSITIONS } from '../src/routes/activity.js';
 import { businessDate } from '../src/lib/time.js';
+import { AUTH_HEADERS } from './test-auth.js';
 
 const AGENT = 'sean_deardorff@us.aflac.com';
 
@@ -35,7 +36,7 @@ function envWithCompany({ id = 'acct-1', confidence = 60, status = 'ACTIVE' } = 
 function postActivity(env, body) {
   return app.fetch(new Request('http://localhost/api/activity', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
     body: JSON.stringify(body)
   }), env, { waitUntil() {} });
 }
@@ -299,4 +300,38 @@ test('a wrong number disqualifies without also recording a callback', async () =
   assert.equal(company.next_action, null);
   assert.equal(company.next_action_date, null);
 });
+
+test('GET /api/activity enforces multi-tenant contact isolation in ACTIVITY_SELECT', async () => {
+  const env = envWithCompany({ id: 'acct-shared', confidence: 60 });
+
+  // 1. Insert activity for AGENT on acct-shared with no contact_id
+  env.DB._raw.prepare(`
+    INSERT INTO activity_logs (log_id, company_id, timestamp, is_in_person, is_initial, is_dm_contact, disposition, sync_tier_status, agent_email)
+    VALUES ('log-agent-a', 'acct-shared', datetime('now'), 1, 1, 0, 'Gatekeeper Blocked', 'PENDING', ?)
+  `).run(AGENT);
+
+  // 2. Insert a contact for acct-shared belonging to OTHER_AGENT
+  const OTHER_AGENT = 'other_agent@us.aflac.com';
+  env.DB._raw.prepare(`
+    INSERT INTO companies (company_id, agent_email, company_name, confidence_score, status)
+    VALUES ('acct-shared', ?, 'Ozark Dental Group Other', 60, 'ACTIVE')
+  `).run(OTHER_AGENT);
+
+  env.DB._raw.prepare(`
+    INSERT INTO contacts (contact_id, company_id, first_name, last_name, job_title, is_primary_dm, agent_email)
+    VALUES ('ct-agent-b', 'acct-shared', 'Secret', 'ContactB', 'CEO', 1, ?)
+  `).run(OTHER_AGENT);
+
+  // 3. Fetch activities as AGENT
+  const res = await app.fetch(new Request('http://localhost/api/activity?all=1&company_id=acct-shared', {
+    headers: AUTH_HEADERS
+  }), env, { waitUntil() {} });
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.activities.length, 1);
+  assert.equal(data.activities[0].first_name, null, 'must not leak other agent contact');
+  assert.equal(data.activities[0].last_name, null);
+});
+
 

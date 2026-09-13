@@ -31,6 +31,7 @@ import {
 } from '../src/lib/ai.js';
 import { mapVoiceActivityType } from '../src/routes/voice.js';
 import { businessDate } from '../src/lib/time.js';
+import { AUTH_HEADERS } from './test-auth.js';
 
 const AGENT = 'sean_deardorff@us.aflac.com';
 const TRANSCRIPT = 'Spoke with Dana Whitfield, the office manager. They carry Colonial today.';
@@ -78,7 +79,11 @@ async function seedCompany(env, raw) {
 
 function postVoice(env, form) {
   return app.fetch(
-    new Request('http://localhost/api/voice-debrief', { method: 'POST', body: form }),
+    new Request('http://localhost/api/voice-debrief', {
+      method: 'POST',
+      headers: AUTH_HEADERS,
+      body: form
+    }),
     env,
     { waitUntil() {} }
   );

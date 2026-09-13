@@ -102,10 +102,9 @@ app.use('/api/*', async (c, next) => {
   }
 
   const jwtEmail = extractUserEmail(c);
-  const finalEmail = jwtEmail || 'sean_deardorff@us.aflac.com';
 
-  if (ALLOWED_USERS.includes(finalEmail)) {
-    c.set('userEmail', finalEmail);
+  if (jwtEmail && ALLOWED_USERS.includes(jwtEmail)) {
+    c.set('userEmail', jwtEmail);
     return next();
   } else {
     return c.json({ error: 'Unauthorized' }, 401);
@@ -153,11 +152,48 @@ app.post('/api/admin/reclassify-industries', async (c) => {
     return c.json({ error: 'OPENROUTER_API_KEY is not configured' }, 503);
   }
 
-  const { results } = await c.env.DB.prepare(
-    'SELECT company_id, company_name, industry FROM companies'
-  ).all();
+  let body = {};
+  try {
+    body = await c.req.json();
+  } catch (_) {}
 
-  const rows = Array.isArray(results) ? results : [];
+  const cursor = (body.cursor ?? c.req.query('cursor') ?? '').toString().trim();
+  const limitParam = body.limit ?? c.req.query('limit');
+  const parsedLimit = Number.parseInt(limitParam, 10);
+  const limit = Math.min(Math.max(Number.isFinite(parsedLimit) ? parsedLimit : 10, 1), 25);
+
+  const onlyUnclassifiedParam = body.only_unclassified ?? c.req.query('only_unclassified');
+  const onlyUnclassified = onlyUnclassifiedParam !== undefined
+    ? (onlyUnclassifiedParam === true || onlyUnclassifiedParam === 'true' || onlyUnclassifiedParam === '1' || onlyUnclassifiedParam === 1)
+    : true;
+
+  let rows = [];
+  if (Array.isArray(body.company_ids) && body.company_ids.length > 0) {
+    const targetIds = body.company_ids.slice(0, limit);
+    const placeholders = targetIds.map(() => '?').join(', ');
+    const query = `SELECT company_id, company_name, industry FROM companies WHERE company_id IN (${placeholders}) ORDER BY company_id ASC`;
+    const res = await c.env.DB.prepare(query).bind(...targetIds).all();
+    rows = Array.isArray(res?.results) ? res.results : [];
+  } else {
+    let query = 'SELECT company_id, company_name, industry FROM companies WHERE 1=1';
+    const params = [];
+
+    if (onlyUnclassified) {
+      query += " AND (industry IS NULL OR industry = '' OR industry = 'Other Commercial' OR industry = 'Commercial / Other')";
+    }
+
+    if (cursor) {
+      query += ' AND company_id > ?';
+      params.push(cursor);
+    }
+
+    query += ' ORDER BY company_id ASC LIMIT ?';
+    params.push(limit);
+
+    const res = await c.env.DB.prepare(query).bind(...params).all();
+    rows = Array.isArray(res?.results) ? res.results : [];
+  }
+
   let updated = 0;
   const classifications = [];
 
@@ -172,7 +208,12 @@ app.post('/api/admin/reclassify-industries', async (c) => {
             'UPDATE companies SET industry = ? WHERE company_id = ?'
           ).bind(category, row.company_id).run();
           updated += 1;
-          classifications.push({ company_name: row.company_name, from: row.industry, category });
+          classifications.push({
+            company_id: row.company_id,
+            company_name: row.company_name,
+            from: row.industry,
+            category
+          });
         }
       } catch (err) {
         console.warn(`Reclassify error for ${row.company_name}:`, err.message);
@@ -180,11 +221,18 @@ app.post('/api/admin/reclassify-industries', async (c) => {
     }));
   }
 
+  const has_more = rows.length === limit;
+  const next_cursor = (has_more && rows.length > 0) ? rows[rows.length - 1].company_id : null;
+
   return c.json({
     status: 'success',
     total_scanned: rows.length,
     updated,
-    classifications
+    classifications,
+    cursor: cursor || null,
+    next_cursor,
+    has_more,
+    limit
   });
 });
 
@@ -197,10 +245,10 @@ app.get('/api/health', (c) => c.json({
   status: 'ok',
   business_date: businessDate(),
   providers: {
-    groq: Boolean(c.env.GROQ_API_KEY),
-    openrouter: Boolean(c.env.OPENROUTER_API_KEY),
-    tavily: Boolean(c.env.TAVILY_API_KEY),
-    mapbox: Boolean(c.env.MAPBOX_TOKEN)
+    groq: Boolean(c.env?.GROQ_API_KEY),
+    openrouter: Boolean(c.env?.OPENROUTER_API_KEY),
+    tavily: Boolean(c.env?.TAVILY_API_KEY),
+    mapbox: Boolean(c.env?.MAPBOX_TOKEN)
   }
 }, 200, { 'Cache-Control': 'no-store' }));
 

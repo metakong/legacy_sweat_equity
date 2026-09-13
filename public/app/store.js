@@ -128,7 +128,10 @@ export function enqueue(entry) {
     } catch (err) {
       return reject(err);
     }
-    tx.oncomplete = () => resolve(entry.log_id);
+    tx.oncomplete = () => {
+      updatePendingBadge();
+      resolve(entry.log_id);
+    };
     tx.onerror = () => reject(tx.error);
   });
 }
@@ -189,6 +192,13 @@ export async function updatePendingBadge() {
       ? `Stuck: ${stuck.map((e) => `${e.label} (${e.last_error || 'unknown error'})`).join('; ')}`
       : 'Tap to push queued visits now';
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.updatePendingBadge = updatePendingBadge;
+  window.addEventListener('aflac:sync-badge-update', () => {
+    updatePendingBadge();
+  });
 }
 
 /**
@@ -337,7 +347,17 @@ export async function getQueueDiagnostics() {
 export async function forceSync() {
   consecutiveFailedRuns = 0;
   cancelRetry();
-  return syncQueue();
+  const drained = await syncQueue();
+  try {
+    const { flushAllQueues } = await import('./modules/state.js');
+    if (typeof flushAllQueues === 'function') {
+      await flushAllQueues();
+    }
+  } catch {
+    /* state outbox flush best-effort */
+  }
+  await updatePendingBadge();
+  return drained;
 }
 
 export async function syncQueue() {
@@ -408,6 +428,68 @@ export async function syncQueue() {
           }
         } catch (err) {
           if (await handleFailure(err, 'Company creation')) break;
+        }
+      } else if (entry.type === 'voice_debrief') {
+        try {
+          const form = new FormData();
+          const baseBlob = entry.blob || entry.audioBlob;
+          const base = String(baseBlob?.type || '').split(';')[0].trim().toLowerCase();
+          const stamp = String(entry.timestamp || new Date().toISOString()).replace(/[:.]/g, '-');
+          const ext = base.includes('ogg') ? 'ogg' : 'webm';
+          form.append('audio', baseBlob, `debrief-${stamp}.${ext}`);
+          if (entry.company_id) form.append('company_id', entry.company_id);
+          if (entry.mode) form.append('mode', entry.mode);
+          if (entry.timestamp) form.append('timestamp', entry.timestamp);
+
+          const res = await fetch('/api/voice-debrief', { method: 'POST', body: form });
+          if (!res.ok) {
+            const error = new Error(`Voice debrief rejected (${res.status})`);
+            error.status = res.status;
+            throw error;
+          }
+          const result = await res.json().catch(() => ({}));
+          await remove(entry.log_id);
+          drained += 1;
+          if (typeof window !== 'undefined' && window.syncChannel?.postMessage) {
+            window.syncChannel.postMessage({
+              type: 'CRM_UPDATE',
+              company_id: entry.company_id
+            });
+          }
+          window.dispatchEvent(new CustomEvent('voicelogged', { detail: result }));
+        } catch (err) {
+          if (await handleFailure(err, 'Voice debrief')) break;
+        }
+      } else if (entry.type === 'quick_action') {
+        try {
+          const res = await fetch('/api/activity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              company_id: entry.company_id,
+              disposition: entry.disposition,
+              mode: entry.mode,
+              next_action: entry.next_action,
+              next_action_date: entry.next_action_date,
+              timestamp: entry.timestamp
+            })
+          });
+          if (!res.ok) {
+            const error = new Error(`Quick action rejected (${res.status})`);
+            error.status = res.status;
+            throw error;
+          }
+          await remove(entry.log_id);
+          drained += 1;
+          if (typeof window !== 'undefined' && window.syncChannel?.postMessage) {
+            window.syncChannel.postMessage({
+              type: 'CRM_UPDATE',
+              company_id: entry.company_id,
+              disposition: entry.disposition
+            });
+          }
+        } catch (err) {
+          if (await handleFailure(err, 'Quick action')) break;
         }
       } else if (entry.audioBlob) {
         try {

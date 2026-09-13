@@ -19,6 +19,7 @@ import { createD1 } from '../mockEnv.js';
 import { normalizeCompany, upsertCompany } from '../src/lib/db.js';
 import { encodeGeohash, decodeGeohashBounds, getGeohashQueryCells } from '../src/lib/geo.js';
 import { haversineDistanceMeters, normalizeRadarLimit } from '../src/routes/radar.js';
+import { AUTH_HEADERS } from './test-auth.js';
 
 const AGENT = 'sean_deardorff@us.aflac.com';
 const ORIGIN = { lat: 37.2089, lng: -93.2923 };
@@ -39,7 +40,7 @@ function envFor() {
 }
 
 const call = (env, url) =>
-  app.fetch(new Request(`http://localhost${url}`), env, { waitUntil() {} });
+  app.fetch(new Request(`http://localhost${url}`, { headers: AUTH_HEADERS }), env, { waitUntil() {} });
 
 async function seedCompany(env, raw) {
   const company = normalizeCompany(raw);

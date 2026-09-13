@@ -16,6 +16,7 @@ import { app } from '../src/index.js';
 import { createD1 } from '../mockEnv.js';
 import { LEAD_LIMITS, CONFIDENCE_BANDS, LEAD_MODES, TRIAGE_MAX_CONFIDENCE, IMPORT_CONFIDENCE_SCORE, MAX_IMPORT_ROWS, FIELD_GEOHASH_PRECISION } from '../src/routes/leads.js';
 import { encodeGeohash, decodeGeohashBounds } from '../src/lib/geo.js';
+import { AUTH_HEADERS } from './test-auth.js';
 
 const AGENT = 'sean_deardorff@us.aflac.com';
 const OTHER_AGENT = 'someone_else@us.aflac.com';
@@ -24,8 +25,10 @@ function tempDbPath() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aflac-leads-')), 'test.sqlite');
 }
 
-const call = (env, url, init) =>
-  app.fetch(new Request(`http://localhost${url}`, init), env, { waitUntil() {} });
+const call = (env, url, init = {}) => {
+  const headers = { ...AUTH_HEADERS, ...(init.headers || {}) };
+  return app.fetch(new Request(`http://localhost${url}`, { ...init, headers }), env, { waitUntil() {} });
+};
 
 function postJson(env, url, payload) {
   return call(env, url, {

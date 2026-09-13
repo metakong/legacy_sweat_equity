@@ -7,6 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { app } from '../src/index.js';
+import { timingSafeEqual } from '../src/routes/oauth.js';
 
 const call = (env, url, init) =>
   app.fetch(new Request(`http://localhost${url}`, init), env, { waitUntil() {} });
@@ -161,4 +162,68 @@ test('POST /api/oauth/token issues valid token payload containing MCP_SECRET_KEY
   assert.equal(body.token_type, 'Bearer');
   assert.equal(body.expires_in, 31536000);
   assert.equal(body.refresh_token, 'mock_refresh_token');
+});
+
+test('POST /api/oauth/token rejects when client credentials are missing', async () => {
+  const env = { MCP_SECRET_KEY: 'real_secret_key' };
+
+  const res = await call(env, '/api/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'authorization_code',
+      code: 'mock_auth_code'
+    })
+  });
+
+  assert.equal(res.status, 401);
+  const body = await res.json();
+  assert.equal(body.error, 'invalid_client');
+});
+
+test('POST /api/oauth/token rejects when client_secret is invalid', async () => {
+  const env = { MCP_SECRET_KEY: 'real_secret_key' };
+
+  const res = await call(env, '/api/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'authorization_code',
+      code: 'mock_auth_code',
+      client_id: 'gemini_spark_dynamic_client',
+      client_secret: 'wrong_secret'
+    })
+  });
+
+  assert.equal(res.status, 401);
+  const body = await res.json();
+  assert.equal(body.error, 'invalid_client');
+  assert.equal(body.error_description, 'Invalid client credentials');
+});
+
+test('POST /api/oauth/token accepts credentials via Authorization Basic header', async () => {
+  const env = { MCP_SECRET_KEY: 'real_secret_key' };
+  const basicAuth = 'Basic ' + Buffer.from('gemini_spark_dynamic_client:dynamic_secret').toString('base64');
+
+  const res = await call(env, '/api/oauth/token', {
+    method: 'POST',
+    headers: {
+      'Authorization': basicAuth,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: 'grant_type=authorization_code&code=mock_auth_code'
+  });
+
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.access_token, 'real_secret_key');
+});
+
+test('timingSafeEqual correctly compares strings in constant time', () => {
+  assert.equal(timingSafeEqual('secret123', 'secret123'), true);
+  assert.equal(timingSafeEqual('secret123', 'secret124'), false);
+  assert.equal(timingSafeEqual('short', 'much_longer_string'), false);
+  assert.equal(timingSafeEqual('', ''), true);
+  assert.equal(timingSafeEqual(null, 'test'), false);
+  assert.equal(timingSafeEqual(undefined, undefined), false);
 });

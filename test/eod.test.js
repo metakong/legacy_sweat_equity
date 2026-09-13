@@ -16,6 +16,7 @@ import path from 'node:path';
 import { app } from '../src/index.js';
 import { createD1 } from '../mockEnv.js';
 import { businessDate } from '../src/lib/time.js';
+import { AUTH_HEADERS } from './test-auth.js';
 
 const AGENT = 'sean_deardorff@us.aflac.com';
 const OTHER_AGENT = 'someone_else@us.aflac.com';
@@ -25,7 +26,7 @@ function tempDbPath() {
 }
 
 const call = (env, url) =>
-  app.fetch(new Request(`http://localhost${url}`), env, { waitUntil() {} });
+  app.fetch(new Request(`http://localhost${url}`, { headers: AUTH_HEADERS }), env, { waitUntil() {} });
 
 async function aggregatesFor(url, env) {
   const res = await call(env, url);

@@ -162,6 +162,10 @@ const server = http.createServer(async (req, res) => {
     for (const [k, v] of Object.entries(req.headers)) {
       if (v !== undefined) headers.set(k, Array.isArray(v) ? v.join(', ') : v);
     }
+    if (!headers.has('cf-access-jwt-assertion')) {
+      const devJwt = 'header.' + Buffer.from(JSON.stringify({ email: 'sean_deardorff@us.aflac.com' })).toString('base64') + '.sig';
+      headers.set('cf-access-jwt-assertion', devJwt);
+    }
 
     const hasBody = req.method !== 'GET' && req.method !== 'HEAD' && body.length > 0;
     const workerReq = new Request(url.toString(), {

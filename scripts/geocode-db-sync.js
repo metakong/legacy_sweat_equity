@@ -45,7 +45,6 @@ import path from 'node:path';
 
 const DEFAULT_INPUT = 'temp-prod-rows.json';
 const DEFAULT_OUTPUT = 'geocode-updates.sql';
-const TOKEN_FILE = 'mapbox_token.txt';
 
 /** Matches geocodeAddress() in src/lib/ai.js. */
 const MAPBOX_TYPES = 'address,poi';
@@ -83,12 +82,8 @@ function mapboxToken() {
   const fromEnv = process.env.MAPBOX_TOKEN;
   if (fromEnv && fromEnv.trim()) return fromEnv.trim();
 
-  try {
-    return fs.readFileSync(path.join(process.cwd(), TOKEN_FILE), 'utf8').trim();
-  } catch {
-    console.error('MAPBOX_TOKEN is not in the environment and mapbox_token.txt is unreadable.');
-    process.exit(1);
-  }
+  console.error('MAPBOX_TOKEN is not set in the environment.');
+  process.exit(1);
 }
 
 // ---------------------------------------------------------------------

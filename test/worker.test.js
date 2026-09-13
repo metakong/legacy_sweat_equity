@@ -4,6 +4,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { createD1 } from '../mockEnv.js';
 
 import {
   cleanText,
@@ -47,6 +51,27 @@ import {
 } from '../src/lib/db.js';
 import { computeMetrics, fallbackReport } from '../src/routes/eod.js';
 import { computeTelemetry, app } from '../src/index.js';
+import { AUTH_HEADERS } from './test-auth.js';
+
+const origRequest = app.request.bind(app);
+app.request = (input, init = {}, env, executionCtx) => {
+  if (typeof input === 'string') {
+    const headers = new Headers(init.headers || {});
+    if (!headers.has('cf-access-jwt-assertion')) {
+      headers.set('cf-access-jwt-assertion', AUTH_HEADERS['cf-access-jwt-assertion']);
+    }
+    return origRequest(input, { ...init, headers }, env, executionCtx);
+  } else if (input instanceof Request) {
+    if (!input.headers.has('cf-access-jwt-assertion')) {
+      const headers = new Headers(input.headers);
+      headers.set('cf-access-jwt-assertion', AUTH_HEADERS['cf-access-jwt-assertion']);
+      const modifiedReq = new Request(input, { headers });
+      return origRequest(modifiedReq, init, env, executionCtx);
+    }
+    return origRequest(input, init, env, executionCtx);
+  }
+  return origRequest(input, init, env, executionCtx);
+};
 
 // Built from char codes so the literals below never contain a raw control byte.
 const NUL = String.fromCharCode(0);
@@ -1650,5 +1675,129 @@ test('GET /api/radar reads the tenant-scoped geohash cells from D1 with no netwo
     assert.equal(networkCalls.length, 0);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('Zero Trust: API auth middleware rejects missing or invalid cf-access-jwt-assertion', async () => {
+  // 1. Missing JWT assertion header
+  const resNoAuth = await origRequest('/api/companies?limit=10', { method: 'GET' });
+  assert.equal(resNoAuth.status, 401);
+  const jsonNoAuth = await resNoAuth.json();
+  assert.equal(jsonNoAuth.error, 'Unauthorized');
+
+  // 2. Untrusted email in JWT assertion
+  const badJwt = 'header.' + Buffer.from(JSON.stringify({ email: 'unauthorized_attacker@external.com' })).toString('base64') + '.sig';
+  const resBadAuth = await origRequest('/api/companies?limit=10', {
+    method: 'GET',
+    headers: { 'cf-access-jwt-assertion': badJwt }
+  });
+  assert.equal(resBadAuth.status, 401);
+  const jsonBadAuth = await resBadAuth.json();
+  assert.equal(jsonBadAuth.error, 'Unauthorized');
+
+  // 3. Health check is public / exempted
+  const resHealth = await origRequest('/api/health', { method: 'GET' });
+  assert.equal(resHealth.status, 200);
+});
+
+test('POST /api/admin/reclassify-industries enforces keyset pagination and filters correctly', async () => {
+  const tempDb = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aflac-reclassify-')), 'test.sqlite');
+  const d1 = createD1(tempDb);
+
+  try {
+    // 1. Missing OPENROUTER_API_KEY returns 503
+    const resNoKey = await app.request('/api/admin/reclassify-industries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    }, { DB: d1, OPENROUTER_API_KEY: '' });
+    assert.equal(resNoKey.status, 503);
+    const jsonNoKey = await resNoKey.json();
+    assert.equal(jsonNoKey.error, 'OPENROUTER_API_KEY is not configured');
+
+    // 2. Seed test companies: 5 unclassified + 1 already classified
+    // These names match deterministic rules in classifyIndustry so no network calls are needed
+    const insert = d1._raw.prepare(`
+      INSERT INTO companies (company_id, agent_email, company_name, industry)
+      VALUES (?, ?, ?, ?)
+    `);
+    insert.run('c01', 'sean_deardorff@us.aflac.com', 'City of Willard', null);
+    insert.run('c02', 'sean_deardorff@us.aflac.com', 'Missouri Walnut', '');
+    insert.run('c03', 'sean_deardorff@us.aflac.com', 'LinkOne Ingredient Solutions', 'Other Commercial');
+    insert.run('c04', 'sean_deardorff@us.aflac.com', 'Triple P Recycling', 'Commercial / Other');
+    insert.run('c05', 'sean_deardorff@us.aflac.com', 'Summit Natural Gas', null);
+    insert.run('c99', 'sean_deardorff@us.aflac.com', 'Existing Enterprise', 'Healthcare');
+
+    const env = {
+      DB: d1,
+      OPENROUTER_API_KEY: 'test-key-deterministic'
+    };
+
+    // 3. First page (limit: 2, cursor: '')
+    const page1Res = await app.request('/api/admin/reclassify-industries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 2, cursor: '', only_unclassified: true })
+    }, env);
+    assert.equal(page1Res.status, 200);
+    const page1 = await page1Res.json();
+    assert.equal(page1.status, 'success');
+    assert.equal(page1.total_scanned, 2);
+    assert.equal(page1.has_more, true);
+    assert.equal(page1.next_cursor, 'c02');
+    assert.equal(page1.limit, 2);
+    assert.equal(page1.classifications.length, 2);
+    assert.equal(page1.classifications[0].company_id, 'c01');
+    assert.equal(page1.classifications[0].category, 'Civic & Public Admin');
+    assert.equal(page1.classifications[1].company_id, 'c02');
+    assert.equal(page1.classifications[1].category, 'Manufacturing');
+
+    // 4. Second page (limit: 2, cursor: 'c02')
+    const page2Res = await app.request('/api/admin/reclassify-industries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 2, cursor: 'c02', only_unclassified: true })
+    }, env);
+    assert.equal(page2Res.status, 200);
+    const page2 = await page2Res.json();
+    assert.equal(page2.total_scanned, 2);
+    assert.equal(page2.has_more, true);
+    assert.equal(page2.next_cursor, 'c04');
+    assert.equal(page2.classifications[0].company_id, 'c03');
+    assert.equal(page2.classifications[0].category, 'Manufacturing');
+    assert.equal(page2.classifications[1].company_id, 'c04');
+    assert.equal(page2.classifications[1].category, 'Utilities & Communications');
+
+    // 5. Third page (limit: 2, cursor: 'c04')
+    const page3Res = await app.request('/api/admin/reclassify-industries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 2, cursor: 'c04', only_unclassified: true })
+    }, env);
+    assert.equal(page3Res.status, 200);
+    const page3 = await page3Res.json();
+    assert.equal(page3.total_scanned, 1);
+    assert.equal(page3.has_more, false);
+    assert.equal(page3.next_cursor, null);
+    assert.equal(page3.classifications[0].company_id, 'c05');
+    assert.equal(page3.classifications[0].category, 'Utilities & Communications');
+
+    // 6. Verify c99 was untouched and remains 'Healthcare'
+    const c99Row = d1._raw.prepare('SELECT industry FROM companies WHERE company_id = ?').get('c99');
+    assert.equal(c99Row.industry, 'Healthcare');
+
+    // 7. Verify limit clamping: limit: 100 clamped to 25
+    const clampedRes = await app.request('/api/admin/reclassify-industries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 100, cursor: '' })
+    }, env);
+    assert.equal(clampedRes.status, 200);
+    const clampedJson = await clampedRes.json();
+    assert.equal(clampedJson.limit, 25);
+  } finally {
+    try {
+      fs.rmSync(path.dirname(tempDb), { recursive: true, force: true });
+    } catch (_) {}
   }
 });

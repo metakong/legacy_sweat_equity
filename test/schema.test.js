@@ -35,6 +35,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { app } from '../src/index.js';
 import { createD1 } from '../mockEnv.js';
 import { LIMITS } from '../src/lib/validate.js';
+import { AUTH_HEADERS } from './test-auth.js';
 
 const AGENT = 'sean_deardorff@us.aflac.com';
 const ROOT = process.cwd();
@@ -198,8 +199,10 @@ function envFor(file) {
   };
 }
 
-const call = (env, url, init) =>
-  app.fetch(new Request(`http://localhost${url}`, init), env, { waitUntil() {} });
+const call = (env, url, init = {}) => {
+  const headers = { ...AUTH_HEADERS, ...(init?.headers || {}) };
+  return app.fetch(new Request(`http://localhost${url}`, { ...init, headers }), env, { waitUntil() {} });
+};
 
 /** Endpoints the UI hits on load. A 500 in any of them blanks a screen. */
 const READ_ENDPOINTS = [
