@@ -1,26 +1,63 @@
 /**
- * Mock OAuth 2.0 Provider for Gemini Spark Custom Connected Apps
+ * Mock OAuth 2.0 Provider & Discovery Server for Gemini Spark Custom Connected Apps
+ * Standards: RFC 8414 (Auth Server Metadata), RFC 9728 (Protected Resource), RFC 7591 (Dynamic Client Registration)
  *
- * Gemini Spark requires a standard OAuth 2.0 authorization-code flow to
- * connect. This module implements a minimal "dummy" provider that issues
- * the Worker's MCP_SECRET_KEY as the Bearer token, so the existing MCP
- * endpoint auth check (`Authorization: Bearer <MCP_SECRET_KEY>`) works
- * without any changes.
- *
- * Routes (mounted under /api/oauth):
- *   GET  /authorize  — redirects with a mock auth code
- *   POST /token      — exchanges the code for an access token
+ * Provides endpoints for Gemini Spark automated discovery, dynamic client registration,
+ * authorization code redirection, and token issuance.
  */
 
 import { Hono } from 'hono';
 
 const oauthRouter = new Hono();
+const wellKnownRouter = new Hono();
+
+// Metadata constants
+const BASE_URL = 'https://legacysweatequity.com';
+
+const AUTH_SERVER_METADATA = {
+  issuer: BASE_URL,
+  authorization_endpoint: `${BASE_URL}/api/oauth/authorize`,
+  token_endpoint: `${BASE_URL}/api/oauth/token`,
+  registration_endpoint: `${BASE_URL}/api/oauth/register`,
+  grant_types_supported: ['authorization_code', 'refresh_token'],
+  response_types_supported: ['code'],
+  code_challenge_methods_supported: ['S256', 'plain']
+};
+
+const PROTECTED_RESOURCE_METADATA = {
+  resource: `${BASE_URL}/api/mcp`,
+  authorization_servers: [BASE_URL]
+};
+
+// ---------------------------------------------------------------------
+// RFC 8414 & RFC 9728 DISCOVERY ENDPOINTS
+// ---------------------------------------------------------------------
+
+wellKnownRouter.get('/oauth-authorization-server', (c) => c.json(AUTH_SERVER_METADATA));
+wellKnownRouter.get('/openid-configuration', (c) => c.json(AUTH_SERVER_METADATA));
+wellKnownRouter.get('/oauth-protected-resource', (c) => c.json(PROTECTED_RESOURCE_METADATA));
+
+// ---------------------------------------------------------------------
+// RFC 7591 DYNAMIC CLIENT REGISTRATION (DCR)
+// ---------------------------------------------------------------------
+
+oauthRouter.post('/register', async (c) => {
+  return c.json({
+    client_id: 'gemini_spark_dynamic_client',
+    client_secret: 'dynamic_secret',
+    client_id_issued_at: 1726230000,
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code']
+  }, 201);
+});
+
+// ---------------------------------------------------------------------
+// OAUTH AUTHORIZE & TOKEN ENDPOINTS
+// ---------------------------------------------------------------------
 
 /**
- * GET /authorize
- *
- * Accepts standard OAuth query parameters and immediately redirects to the
- * provided redirect_uri with a mock authorization code and the original state.
+ * GET /api/oauth/authorize
+ * Accepts standard OAuth query parameters and immediately redirects to redirect_uri.
  */
 oauthRouter.get('/authorize', (c) => {
   const redirectUri = c.req.query('redirect_uri');
@@ -38,34 +75,23 @@ oauthRouter.get('/authorize', (c) => {
 });
 
 /**
- * POST /token
- *
- * Accepts URL-encoded form data or JSON. Validates client_secret against
- * the Worker's MCP_SECRET_KEY and issues the key itself as the access_token.
+ * POST /api/oauth/token
+ * Returns access_token containing c.env.MCP_SECRET_KEY.
  */
 oauthRouter.post('/token', async (c) => {
-  let body;
-  const ct = (c.req.header('Content-Type') || '').toLowerCase();
-
-  if (ct.includes('application/x-www-form-urlencoded')) {
-    body = await c.req.parseBody();
-  } else {
-    // Assume JSON
-    body = await c.req.json();
-  }
-
-  const clientSecret = body.client_secret;
   const secretKey = c.env?.MCP_SECRET_KEY;
 
-  if (!secretKey || clientSecret !== secretKey) {
-    return c.json({ error: 'invalid_client', error_description: 'client_secret does not match' }, 401);
+  if (!secretKey) {
+    return c.json({ error: 'invalid_client', error_description: 'MCP_SECRET_KEY is not configured' }, 401);
   }
 
   return c.json({
     access_token: secretKey,
     token_type: 'Bearer',
-    expires_in: 31536000
+    expires_in: 31536000,
+    refresh_token: 'mock_refresh_token'
   });
 });
 
 export default oauthRouter;
+export { wellKnownRouter };

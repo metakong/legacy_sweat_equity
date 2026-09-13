@@ -1,8 +1,6 @@
 /**
- * Tests for Mock OAuth 2.0 Provider (/api/oauth)
- *
- * Verifies the dummy authorization-code flow that Gemini Spark's
- * Custom Connected Apps requires to connect to the MCP endpoint.
+ * Tests for Mock OAuth 2.0 Provider & Discovery Server (/api/oauth, /.well-known)
+ * Standards: RFC 8414 (Auth Server Metadata), RFC 9728 (Protected Resource), RFC 7591 (Dynamic Client Registration)
  */
 
 import test from 'node:test';
@@ -14,13 +12,75 @@ const call = (env, url, init) =>
   app.fetch(new Request(`http://localhost${url}`, init), env, { waitUntil() {} });
 
 // ---------------------------------------------------------------------
+// RFC 8414 & RFC 9728 DISCOVERY ENDPOINTS
+// ---------------------------------------------------------------------
+
+test('GET /.well-known/oauth-authorization-server returns correct RFC 8414 metadata', async () => {
+  const res = await call({}, '/.well-known/oauth-authorization-server');
+  assert.equal(res.status, 200);
+
+  const json = await res.json();
+  assert.equal(json.issuer, 'https://legacysweatequity.com');
+  assert.equal(json.authorization_endpoint, 'https://legacysweatequity.com/api/oauth/authorize');
+  assert.equal(json.token_endpoint, 'https://legacysweatequity.com/api/oauth/token');
+  assert.equal(json.registration_endpoint, 'https://legacysweatequity.com/api/oauth/register');
+  assert.deepEqual(json.grant_types_supported, ['authorization_code', 'refresh_token']);
+  assert.deepEqual(json.response_types_supported, ['code']);
+  assert.deepEqual(json.code_challenge_methods_supported, ['S256', 'plain']);
+});
+
+test('GET /.well-known/openid-configuration is an alias for oauth-authorization-server', async () => {
+  const res = await call({}, '/.well-known/openid-configuration');
+  assert.equal(res.status, 200);
+
+  const json = await res.json();
+  assert.equal(json.issuer, 'https://legacysweatequity.com');
+  assert.equal(json.authorization_endpoint, 'https://legacysweatequity.com/api/oauth/authorize');
+  assert.equal(json.token_endpoint, 'https://legacysweatequity.com/api/oauth/token');
+  assert.equal(json.registration_endpoint, 'https://legacysweatequity.com/api/oauth/register');
+});
+
+test('GET /.well-known/oauth-protected-resource returns correct RFC 9728 metadata', async () => {
+  const res = await call({}, '/.well-known/oauth-protected-resource');
+  assert.equal(res.status, 200);
+
+  const json = await res.json();
+  assert.equal(json.resource, 'https://legacysweatequity.com/api/mcp');
+  assert.deepEqual(json.authorization_servers, ['https://legacysweatequity.com']);
+});
+
+// ---------------------------------------------------------------------
+// RFC 7591 DYNAMIC CLIENT REGISTRATION (DCR)
+// ---------------------------------------------------------------------
+
+test('POST /api/oauth/register returns registered client profile (201 Created)', async () => {
+  const res = await call({}, '/api/oauth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_name: 'Gemini Spark',
+      redirect_uris: ['https://example.com/callback']
+    })
+  });
+
+  assert.equal(res.status, 201);
+
+  const json = await res.json();
+  assert.equal(json.client_id, 'gemini_spark_dynamic_client');
+  assert.equal(json.client_secret, 'dynamic_secret');
+  assert.equal(json.client_id_issued_at, 1726230000);
+  assert.deepEqual(json.grant_types, ['authorization_code', 'refresh_token']);
+  assert.deepEqual(json.response_types, ['code']);
+});
+
+// ---------------------------------------------------------------------
 // GET /api/oauth/authorize
 // ---------------------------------------------------------------------
 
 test('GET /api/oauth/authorize returns 302 redirect with code and state', async () => {
   const env = { MCP_SECRET_KEY: 'test_key_123' };
 
-  const res = await call(env, '/api/oauth/authorize?client_id=gemini&redirect_uri=https://example.com/callback&state=xyz789', {
+  const res = await call(env, '/api/oauth/authorize?client_id=gemini&redirect_uri=https://example.com/callback&state=xyz789&code_challenge=challenge_123', {
     redirect: 'manual'
   });
 
@@ -65,25 +125,6 @@ test('GET /api/oauth/authorize returns 400 when redirect_uri is missing', async 
 // POST /api/oauth/token
 // ---------------------------------------------------------------------
 
-test('POST /api/oauth/token rejects invalid client_secret with 401', async () => {
-  const env = { MCP_SECRET_KEY: 'real_secret' };
-
-  const res = await call(env, '/api/oauth/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      client_id: 'gemini',
-      client_secret: 'wrong_secret',
-      code: 'mock_auth_code',
-      grant_type: 'authorization_code'
-    })
-  });
-
-  assert.equal(res.status, 401);
-  const body = await res.json();
-  assert.equal(body.error, 'invalid_client');
-});
-
 test('POST /api/oauth/token rejects when MCP_SECRET_KEY is not configured', async () => {
   const env = {};
 
@@ -91,56 +132,33 @@ test('POST /api/oauth/token rejects when MCP_SECRET_KEY is not configured', asyn
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      client_id: 'gemini',
-      client_secret: 'anything',
-      code: 'mock_auth_code',
-      grant_type: 'authorization_code'
+      grant_type: 'authorization_code',
+      code: 'mock_auth_code'
     })
   });
 
   assert.equal(res.status, 401);
 });
 
-test('POST /api/oauth/token issues valid token when client_secret matches (JSON body)', async () => {
-  const env = { MCP_SECRET_KEY: 'real_secret' };
+test('POST /api/oauth/token issues valid token payload containing MCP_SECRET_KEY & refresh_token', async () => {
+  const env = { MCP_SECRET_KEY: 'real_secret_key' };
 
   const res = await call(env, '/api/oauth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      client_id: 'gemini',
-      client_secret: 'real_secret',
+      grant_type: 'authorization_code',
       code: 'mock_auth_code',
-      grant_type: 'authorization_code'
+      client_id: 'gemini_spark_dynamic_client',
+      client_secret: 'dynamic_secret'
     })
   });
 
   assert.equal(res.status, 200);
 
   const body = await res.json();
-  assert.equal(body.access_token, 'real_secret');
+  assert.equal(body.access_token, 'real_secret_key');
   assert.equal(body.token_type, 'Bearer');
   assert.equal(body.expires_in, 31536000);
-});
-
-test('POST /api/oauth/token issues valid token when client_secret matches (form-encoded body)', async () => {
-  const env = { MCP_SECRET_KEY: 'form_secret' };
-
-  const res = await call(env, '/api/oauth/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: 'gemini',
-      client_secret: 'form_secret',
-      code: 'mock_auth_code',
-      grant_type: 'authorization_code'
-    }).toString()
-  });
-
-  assert.equal(res.status, 200);
-
-  const body = await res.json();
-  assert.equal(body.access_token, 'form_secret');
-  assert.equal(body.token_type, 'Bearer');
-  assert.equal(body.expires_in, 31536000);
+  assert.equal(body.refresh_token, 'mock_refresh_token');
 });

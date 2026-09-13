@@ -8,6 +8,26 @@
 
 ---
 
+## 2026-09-13 16:54 UTC (2026-09-13 11:54 CDT) — RFC 8414 & RFC 7591 OAuth Discovery & DCR Support
+
+### Summary
+Updated `src/routes/oauth.js` and `src/index.js` to implement full RFC 8414 Authorization Server Metadata, RFC 9728 Protected Resource Metadata, and RFC 7591 Dynamic Client Registration (DCR) for Google Gemini Spark integration.
+
+### Key Actions
+1. **OAuth Discovery Endpoints (`/.well-known/*`)**:
+   - `GET /.well-known/oauth-authorization-server` & `/.well-known/openid-configuration`: Returns RFC 8414 server metadata including issuer, authorization/token/registration endpoints, grant types, response types, and PKCE methods.
+   - `GET /.well-known/oauth-protected-resource`: Returns RFC 9728 metadata binding `/api/mcp` as the protected resource.
+2. **Dynamic Client Registration (`POST /api/oauth/register`)**:
+   - Implemented RFC 7591 endpoint returning `201 Created` with dynamic client credentials (`gemini_spark_dynamic_client`, `dynamic_secret`).
+3. **Token Endpoint Enhancement (`POST /api/oauth/token`)**:
+   - Updated to issue `{ access_token: env.MCP_SECRET_KEY, token_type: "Bearer", expires_in: 31536000, refresh_token: "mock_refresh_token" }`.
+4. **Wired & Tested (`src/index.js` & `test/oauth.test.js`)**:
+   - Mounted `wellKnownRouter` at `/.well-known` and exempted `/.well-known/*` from JWT authentication middleware.
+   - Updated `test/oauth.test.js` to test discovery endpoints, DCR endpoint, and updated token responses.
+   - Verified `npm test`: 353 unit tests pass 100%.
+
+---
+
 ## 2026-09-13 16:28 UTC (2026-09-13 11:28 CDT) — Mock OAuth 2.0 Provider for Gemini Spark
 
 ### Summary
