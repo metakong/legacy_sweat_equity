@@ -238,7 +238,8 @@ root.post('/transcribe-and-log', async (c) => {
   const booleans = {
     is_in_person: toBool(form.get('is_in_person')),
     is_initial: toBool(form.get('is_initial')),
-    is_dm_contact: toBool(form.get('is_dm_contact'))
+    is_dm_contact: toBool(form.get('is_dm_contact')),
+    coordinator_present: toBool(form.get('coordinator_present'))
   };
 
   // Resolve the account first: a log with no valid company_id violates the FK

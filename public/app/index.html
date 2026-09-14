@@ -169,7 +169,14 @@
 
           <!-- ---------- TARGET ---------- -->
           <div class="panel">
-            <h2>🏢 Target Account</h2>
+            <div class="panel-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <h2 style="margin: 0;">🏢 Target Account</h2>
+              <label class="toggle-switch" style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500;">
+                👔 Coordinator Present
+                <input type="checkbox" id="coordinatorToggle">
+                <span class="slider"></span>
+              </label>
+            </div>
 
             <div class="form-group company-autocomplete-wrapper">
               <div class="form-label-row">
@@ -209,6 +216,9 @@
             </button>
 
             <div class="dossier" id="dossierPanel" hidden aria-live="polite">
+              <div style="display: flex; justify-content: flex-end; margin-bottom: 12px;">
+                <button type="button" class="btn btn-danger" id="btnDisqualifyField" style="padding: 6px 12px; font-size: 14px; background-color: var(--danger-color); color: white; border-radius: 8px; border: none;">🚫 Disqualify</button>
+              </div>
               <!-- What the agent knows before he walks in: who to ask for, a
                    one-tap dial, and the strategy note from his own field list. -->
               <div class="account-intel" id="accountIntel" hidden>

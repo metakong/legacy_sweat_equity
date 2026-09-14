@@ -21,7 +21,7 @@
  * without a third-party dependency on the critical path.
  */
 
-import { el } from '../ui.js';
+import { el, apiPost, showToast } from '../ui.js';
 import { createVoiceWidget } from './voice-widget.js';
 
 export const LEADS_ENDPOINT = '/api/leads';
@@ -499,6 +499,35 @@ export function mountCanvassView(container, options = {}) {
         hasCoordinates(stop) ? null : 'no coordinates — geocode to route'
       ].filter(Boolean);
 
+      const disqualifyBtn = el('button', {
+        className: 'btn btn-danger',
+        text: '🚫 Disqualify',
+        attrs: { type: 'button', style: 'margin-top: 8px; padding: 4px 8px; font-size: 13px;' },
+        on: {
+          click: async (e) => {
+            if (!confirm(`Disqualify ${stop.company_name}?`)) return;
+            const btn = e.target;
+            const prevText = btn.textContent;
+            try {
+              btn.disabled = true;
+              btn.textContent = '...';
+              await apiPost('/api/leads/disqualify', {
+                company_id: stop.company_id,
+                reason: 'Field disqualification'
+              });
+              showToast(`${stop.company_name} disqualified.`, 'success');
+              // Remove the li from the list
+              const li = btn.closest('li');
+              if (li) li.remove();
+            } catch (err) {
+              showToast(err.message, 'error');
+              btn.disabled = false;
+              btn.textContent = prevText;
+            }
+          }
+        }
+      });
+
       list.append(el('li', {
         className: `canvass-stop${hasCoordinates(stop) ? '' : ' canvass-stop-unroutable'}`,
         children: [
@@ -514,7 +543,8 @@ export function mountCanvassView(container, options = {}) {
               className: 'canvass-stop-callback',
               text: `📞 ${stop.next_action_date}: ${stop.next_action || 'callback promised'}`
             })
-            : null
+            : null,
+          el('div', { className: 'canvass-stop-actions' }, [disqualifyBtn])
         ].filter(Boolean)
       }));
     }

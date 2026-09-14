@@ -34,6 +34,7 @@ import companiesRouter, { contacts as contactsRouter, enums as enumsRouter, impo
 import activityRouter, { root as activityRootRouter, audio as audioRouter } from './routes/activity.js';
 import enrichRouter from './routes/enrich.js';
 import eodRouter, { handleEodAggregates } from './routes/eod.js';
+import telemetryRouter from './routes/telemetry.js';
 import routingRouter from './routes/routing.js';
 import exportsRouter from './routes/exports.js';
 import pipelineRouter from './routes/pipeline.js';
@@ -124,6 +125,7 @@ app.route('/api/eod-debrief', eodRouter);
 // owns the end of the day) but gets a flat path, because it is pasted into a
 // CRM rather than read as a report.
 app.get('/api/eod-aggregates', handleEodAggregates);
+app.route('/api/telemetry/daily', telemetryRouter);
 app.route('/api/route', routingRouter);
 app.route('/api/export', exportsRouter);
 app.route('/api/exports', exportsRouter);

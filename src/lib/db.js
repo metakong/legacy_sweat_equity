@@ -628,6 +628,7 @@ export function normalizeActivityLog(raw) {
       ? cleanCapped(notes, LIMITS.notes, { allowNewlines: true }) || null
       : (notes ? JSON.stringify(notes).slice(0, LIMITS.notes) : null),
     sync_tier_status: matchEnum(raw?.sync_tier_status, SYNC_TIERS) || 'PENDING',
+    coordinator_present: toBool(raw?.coordinator_present),
     next_action_date: asIsoDate(raw?.next_action_date) || null,
     next_action_text: cleanCapped(raw?.next_action_text, 300) || null
   };
@@ -645,8 +646,8 @@ export async function upsertActivityLog(db, log, userEmail) {
       is_in_person, is_initial, is_dm_contact, disposition,
       presentation_date, enrollment_date, projected_ap,
       raw_audio_transcription, ai_structured_notes, sync_tier_status,
-      next_action_date, next_action_text, agent_email
-    ) VALUES (?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      coordinator_present, next_action_date, next_action_text, agent_email
+    ) VALUES (?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(log_id, agent_email) DO UPDATE SET
       contact_id              = COALESCE(excluded.contact_id, activity_logs.contact_id),
       is_in_person            = excluded.is_in_person,
@@ -659,6 +660,7 @@ export async function upsertActivityLog(db, log, userEmail) {
       raw_audio_transcription = COALESCE(excluded.raw_audio_transcription, activity_logs.raw_audio_transcription),
       ai_structured_notes     = COALESCE(excluded.ai_structured_notes, activity_logs.ai_structured_notes),
       sync_tier_status        = excluded.sync_tier_status,
+      coordinator_present     = excluded.coordinator_present,
       next_action_date        = COALESCE(excluded.next_action_date, activity_logs.next_action_date),
       next_action_text        = COALESCE(excluded.next_action_text, activity_logs.next_action_text)
   `).bind(
@@ -676,6 +678,7 @@ export async function upsertActivityLog(db, log, userEmail) {
     log.raw_audio_transcription ?? null,
     log.ai_structured_notes ?? null,
     log.sync_tier_status || 'PENDING',
+    log.coordinator_present ?? 0,
     log.next_action_date ?? null,
     log.next_action_text ?? null,
     userEmail

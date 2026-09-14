@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     raw_audio_transcription TEXT,
     ai_structured_notes TEXT,
     sync_tier_status TEXT DEFAULT 'PENDING',
+    coordinator_present BOOLEAN DEFAULT 0,
     next_action_date TEXT,
     next_action_text TEXT,
     agent_email TEXT NOT NULL DEFAULT 'sean_deardorff@us.aflac.com',

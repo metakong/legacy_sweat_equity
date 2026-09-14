@@ -1274,6 +1274,7 @@ function currentActivityPayload() {
     company,
     ...state.binary,
     manual_disposition: state.funnelOverride || undefined,
+    coordinator_present: $('coordinatorToggle')?.checked ? 1 : 0,
     projected_ap: parseInt($('projectedApInput')?.value, 10) || undefined,
     timestamp: new Date().toISOString(),
     raw_audio_transcription: state.audioBlob ? undefined : (typedNote || undefined),
@@ -1564,6 +1565,49 @@ function initGeofenceWatch() {
   });
 }
 
+function initCoordinatorToggle() {
+  const toggle = $('coordinatorToggle');
+  if (!toggle) return;
+  
+  // Read from localStorage on init
+  const savedState = localStorage.getItem('coordinator_present');
+  if (savedState === '1') {
+    toggle.checked = true;
+  }
+  
+  // Persist on change
+  toggle.addEventListener('change', () => {
+    localStorage.setItem('coordinator_present', toggle.checked ? '1' : '0');
+  });
+}
+
+function initDisqualifyField() {
+  const btn = $('btnDisqualifyField');
+  if (!btn) return;
+  
+  btn.addEventListener('click', async () => {
+    if (!state.selectedCompanyId || state.selectedCompany?.isNew) return;
+    const cName = state.selectedCompany.company_name || 'this account';
+    
+    if (!confirm(`Disqualify ${cName}?`)) return;
+    
+    const prevText = btn.textContent;
+    setButtonBusy(btn, true, '...');
+    try {
+      await apiPost('/api/leads/disqualify', {
+        company_id: state.selectedCompanyId,
+        reason: 'Field disqualification'
+      });
+      showToast(`${cName} disqualified.`, 'success');
+      resetForm();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setButtonBusy(btn, false, prevText);
+    }
+  });
+}
+
 export function initFieldView() {
   initMap();
   initRadarScan();
@@ -1578,6 +1622,8 @@ export function initFieldView() {
   initVoiceResultListener();
   initBroadcastSyncListener();
   initGeofenceWatch();
+  initCoordinatorToggle();
+  initDisqualifyField();
   updateScoreboard();
 
   window.addEventListener('viewactivated', (event) => {

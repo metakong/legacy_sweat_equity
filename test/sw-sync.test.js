@@ -28,8 +28,7 @@ const SW_PATH = path.join(process.cwd(), 'public', 'sw.js');
 const SOURCE = fs.readFileSync(SW_PATH, 'utf8');
 
 const SYNC_TAG = 'sync-agency-outbox';
-const AUDIO_STORE = 'audio_outbox';
-const ACTION_STORE = 'action_outbox';
+const QUEUE_STORE = 'queue';
 
 // ---------------------------------------------------------------------
 // FAKE INDEXEDDB
@@ -110,13 +109,13 @@ class FakeDatabase {
   close() { this.closed = true; }
 }
 
-function createFakeIndexedDB({ stores = [AUDIO_STORE, ACTION_STORE], blocked = false } = {}) {
+function createFakeIndexedDB({ stores = [QUEUE_STORE], blocked = false } = {}) {
   // The database exists BEFORE the worker opens it, so a test can seed a
   // backlog without first triggering an open.
   const db = new FakeDatabase();
   for (const storeName of stores) db._stores.set(storeName, { records: new Map() });
 
-  const databases = new Map([['AgencyOS_DB', db]]);
+  const databases = new Map([['AflacProspectDB', db]]);
 
   return {
     open(name) {
@@ -199,7 +198,7 @@ function loadServiceWorker({ records = {}, fetchImpl, indexedDB = createFakeInde
   vm.runInContext(SOURCE, sandbox, { filename: 'sw.js' });
 
   // Seed after the script ran so a drain sees a real backlog.
-  const db = indexedDB._databases.get('AgencyOS_DB');
+  const db = indexedDB._databases.get('AflacProspectDB');
   if (db) {
     for (const [storeName, values] of Object.entries(records)) {
       const store = db._stores.get(storeName);
@@ -226,14 +225,15 @@ function loadServiceWorker({ records = {}, fetchImpl, indexedDB = createFakeInde
 }
 
 /** Values left in a store after a drain. */
-function remaining(harness, storeName) {
-  const db = harness.indexedDB._databases.get('AgencyOS_DB');
+function remaining(harness, storeName = QUEUE_STORE) {
+  const db = harness.indexedDB._databases.get('AflacProspectDB');
   const store = db?._stores.get(storeName);
   return store ? [...store.records.values()] : [];
 }
 
 function audioRecord(over = {}) {
   return {
+    type: 'voice_debrief',
     blob: new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/webm' }),
     company_id: 'acct-1',
     mode: 'PHONE',
@@ -263,13 +263,13 @@ test('an unrelated sync tag does nothing', async () => {
   const calls = [];
   const harness = loadServiceWorker({
     fetchImpl: async (url) => { calls.push(String(url)); return ok(); },
-    records: { [AUDIO_STORE]: [audioRecord()] }
+    records: { [QUEUE_STORE]: [audioRecord()] }
   });
 
   await harness.syncEvent('some-other-tag');
 
   assert.equal(calls.length, 0, 'a tag this worker does not own must not be drained');
-  assert.equal(remaining(harness, AUDIO_STORE).length, 1);
+  assert.equal(remaining(harness, QUEUE_STORE).length, 1);
 });
 
 // ---------------------------------------------------------------------
@@ -283,7 +283,7 @@ test('a 200 response uploads the debrief and deletes the record', async () => {
       calls.push({ url: String(url), init });
       return ok('{"success":true}');
     },
-    records: { [AUDIO_STORE]: [audioRecord()] }
+    records: { [QUEUE_STORE]: [audioRecord()] }
   });
 
   await harness.syncEvent();
@@ -296,42 +296,40 @@ test('a 200 response uploads the debrief and deletes the record', async () => {
   assert.equal(calls[0].init.body.get('mode'), 'PHONE');
   assert.ok(calls[0].init.body.get('audio'), 'the blob travels with the request');
 
-  assert.equal(remaining(harness, AUDIO_STORE).length, 0, 'only a 200 may delete');
+  assert.equal(remaining(harness, QUEUE_STORE).length, 0, 'only a 200 may delete');
 });
 
 test('a 4xx deletes the record instead of retrying it forever', async () => {
   const harness = loadServiceWorker({
     fetchImpl: async () => httpStatus(422),
-    records: { [AUDIO_STORE]: [audioRecord(), audioRecord()] }
+    records: { [QUEUE_STORE]: [audioRecord(), audioRecord()] }
   });
 
   await harness.syncEvent();
 
-  // A rejected payload will be rejected identically on every wake-up, and
-  // keeping it would wedge every later capture behind it.
-  assert.equal(remaining(harness, AUDIO_STORE).length, 0);
+  assert.equal(remaining(harness, QUEUE_STORE).length, 0);
 });
 
 test('a 5xx keeps the record for the next wake-up', async () => {
   const harness = loadServiceWorker({
     fetchImpl: async () => httpStatus(503),
-    records: { [AUDIO_STORE]: [audioRecord()] }
+    records: { [QUEUE_STORE]: [audioRecord()] }
   });
 
   await harness.syncEvent();
 
-  assert.equal(remaining(harness, AUDIO_STORE).length, 1, 'a server outage is not a rejection');
+  assert.equal(remaining(harness, QUEUE_STORE).length, 1, 'a server outage is not a rejection');
 });
 
 test('a network throw keeps the record', async () => {
   const harness = loadServiceWorker({
     fetchImpl: async () => { throw new TypeError('Failed to fetch'); },
-    records: { [AUDIO_STORE]: [audioRecord()] }
+    records: { [QUEUE_STORE]: [audioRecord()] }
   });
 
   await harness.syncEvent();
 
-  assert.equal(remaining(harness, AUDIO_STORE).length, 1);
+  assert.equal(remaining(harness, QUEUE_STORE).length, 1);
 });
 
 test('a failure stops the walk so later records keep their FIFO position', async () => {
@@ -339,12 +337,11 @@ test('a failure stops the walk so later records keep their FIFO position', async
   const harness = loadServiceWorker({
     fetchImpl: async () => {
       call += 1;
-      // First capture succeeds, second is a dead connection, third is never reached.
       if (call === 1) return ok();
       throw new TypeError('offline');
     },
     records: {
-      [AUDIO_STORE]: [
+      [QUEUE_STORE]: [
         audioRecord({ company_id: 'first' }),
         audioRecord({ company_id: 'second' }),
         audioRecord({ company_id: 'third' })
@@ -354,7 +351,7 @@ test('a failure stops the walk so later records keep their FIFO position', async
 
   await harness.syncEvent();
 
-  const left = remaining(harness, AUDIO_STORE);
+  const left = remaining(harness, QUEUE_STORE);
   assert.equal(call, 2, 'the queue is not hammered after the first failure');
   assert.deepEqual(left.map((record) => record.company_id), ['second', 'third']);
 });
@@ -363,13 +360,13 @@ test('a record with no blob is dropped rather than retried forever', async () =>
   const calls = [];
   const harness = loadServiceWorker({
     fetchImpl: async (url) => { calls.push(String(url)); return ok(); },
-    records: { [AUDIO_STORE]: [audioRecord({ blob: null })] }
+    records: { [QUEUE_STORE]: [audioRecord({ blob: null, audioBlob: null })] }
   });
 
   await harness.syncEvent();
 
   assert.equal(calls.length, 0, 'nothing to upload');
-  assert.equal(remaining(harness, AUDIO_STORE).length, 0);
+  assert.equal(remaining(harness, QUEUE_STORE).length, 0);
 });
 
 // ---------------------------------------------------------------------
@@ -381,7 +378,8 @@ test('a quick drop is POSTed as JSON and deleted on 200', async () => {
   const harness = loadServiceWorker({
     fetchImpl: async (url, init) => { calls.push({ url: String(url), init }); return ok(); },
     records: {
-      [ACTION_STORE]: [{
+      [QUEUE_STORE]: [{
+        type: 'quick_action',
         company_id: 'acct-1',
         disposition: 'GATEKEEPER_BLOCK',
         mode: 'FIELD',
@@ -402,7 +400,7 @@ test('a quick drop is POSTed as JSON and deleted on 200', async () => {
   assert.equal(body.next_action, 'Try Tuesday');
   assert.equal(body.next_action_date, '2026-10-06');
 
-  assert.equal(remaining(harness, ACTION_STORE).length, 0);
+  assert.equal(remaining(harness, QUEUE_STORE).length, 0);
 });
 
 test('one wake-up drains both outboxes', async () => {
@@ -410,8 +408,10 @@ test('one wake-up drains both outboxes', async () => {
   const harness = loadServiceWorker({
     fetchImpl: async (url) => { urls.push(String(url)); return ok(); },
     records: {
-      [AUDIO_STORE]: [audioRecord()],
-      [ACTION_STORE]: [{ company_id: 'acct-2', disposition: 'VM_NO_ANSWER', mode: 'PHONE' }]
+      [QUEUE_STORE]: [
+        audioRecord(),
+        { type: 'quick_action', company_id: 'acct-2', disposition: 'VM_NO_ANSWER', mode: 'PHONE' }
+      ]
     }
   });
 
@@ -420,8 +420,7 @@ test('one wake-up drains both outboxes', async () => {
   assert.equal(urls.length, 2, 'a debrief behind a quick drop must not need a second wake-up');
   assert.ok(urls.some((url) => url.includes('/api/voice-debrief')));
   assert.ok(urls.some((url) => url.includes('/api/activity')));
-  assert.equal(remaining(harness, AUDIO_STORE).length, 0);
-  assert.equal(remaining(harness, ACTION_STORE).length, 0);
+  assert.equal(remaining(harness, QUEUE_STORE).length, 0);
 });
 
 test('an empty outbox is a no-op rather than an error', async () => {
@@ -442,11 +441,10 @@ test('an empty outbox is a no-op rather than an error', async () => {
 
 test('a missing store is drained as empty rather than throwing', async () => {
   const calls = [];
-  // Only the action store exists — the audio one was never created.
   const harness = loadServiceWorker({
     fetchImpl: async (url) => { calls.push(String(url)); return ok(); },
-    indexedDB: createFakeIndexedDB({ stores: [ACTION_STORE] }),
-    records: { [ACTION_STORE]: [{ company_id: 'acct-1', disposition: 'VM_NO_ANSWER', mode: 'PHONE' }] }
+    indexedDB: createFakeIndexedDB({ stores: [QUEUE_STORE] }),
+    records: { [QUEUE_STORE]: [{ type: 'quick_action', company_id: 'acct-1', disposition: 'VM_NO_ANSWER', mode: 'PHONE' }] }
   });
 
   await harness.syncEvent();
@@ -458,21 +456,19 @@ test('a blocked database open does not reject the sync event', async () => {
   const harness = loadServiceWorker({
     fetchImpl: async () => ok(),
     indexedDB: createFakeIndexedDB({ blocked: true }),
-    records: { [AUDIO_STORE]: [audioRecord()] }
+    records: { [QUEUE_STORE]: [audioRecord()] }
   });
 
-  // The listener always resolves: a rejected sync event makes the browser
-  // retry the same records, which is the loop the drain exists to avoid.
   await assert.doesNotReject(() => harness.syncEvent());
-  assert.equal(remaining(harness, AUDIO_STORE).length, 1, 'nothing was lost');
+  assert.equal(remaining(harness, QUEUE_STORE).length, 1, 'nothing was lost');
 });
 
 test('a permanent 4xx failure never rejects the event', async () => {
   const harness = loadServiceWorker({
     fetchImpl: async () => httpStatus(400),
-    records: { [AUDIO_STORE]: [audioRecord()] }
+    records: { [QUEUE_STORE]: [audioRecord()] }
   });
 
   await assert.doesNotReject(() => harness.syncEvent());
-  assert.equal(remaining(harness, AUDIO_STORE).length, 0);
+  assert.equal(remaining(harness, QUEUE_STORE).length, 0);
 });

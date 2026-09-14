@@ -6,6 +6,29 @@
 > B2C roofing canvassing app this project used to be. It is retained as history only.
 > None of that code, schema, or UI still exists.
 
+## 2026-09-14 19:35 UTC (2026-09-14 14:35 CDT) — Phase 2: Architecture Refactor & MCP Expansion
+
+### Summary
+Executed Phase 2 architecture refactor and MCP expansion across the edge API, PWA, database schema, and MCP endpoints:
+1. **Daily Telemetry REST API (`GET /api/telemetry/daily`)**: Aggregates fields for PowerApp submissions. Merges `activity_logs` and `d365_daily_aggregates` with double-counting for `coordinator_present` ride-along touches.
+2. **Weekly Pipeline REST API (`GET /api/eod-debrief/weekly-pipeline`)**: Deterministic Markdown status block grouping active pipeline accounts by real DB stages (`PROPOSAL`, `CLOSED_WON`) with `companies.forecast_ap` totals.
+3. **Omni-Channel MCP Server (`src/routes/mcp.js`)**: Expanded toolset to 6 tools (`update_lead_intel`, `get_daily_telemetry`, `get_pipeline_summary`, `triage_suppression_list`, `generate_route_manifest`, `log_quick_action`). `triage_suppression_list` strictly handles low confidence / ambiguous matches by marking them `Ambiguous / Not Found`.
+4. **PWA Workflow Updates**: Added persistent `👔 Coordinator Present` toggle in `public/app/field.js` / `index.html` and `🚫 Disqualify` buttons in both the field dossier view and canvass card action rows (`public/app/modules/canvass-view.js`).
+5. **Schema Migration (`migrations/0007_coordinator_present.sql`)**: Added `coordinator_present BOOLEAN DEFAULT 0` column to `activity_logs`.
+
+### Key Actions & Changes
+- `schema.sql` & `migrations/0007_coordinator_present.sql`: Schema updated for `coordinator_present`.
+- `src/routes/telemetry.js`: New daily telemetry route.
+- `src/routes/eod.js`: Added `/weekly-pipeline` endpoint.
+- `src/routes/activity.js` & `src/lib/db.js`: Handled `coordinator_present` in activity log normalization, insertions, and updates.
+- `src/routes/mcp.js`: Added 5 new MCP tools.
+- `src/index.js`: Mounted `/api/telemetry/daily` route.
+- `public/app/field.js`, `public/app/index.html`, `public/app/modules/canvass-view.js`: Added coordinator toggle, dossier disqualify button, and canvass card disqualify button.
+- `test/schema.test.js`: Added `0007_coordinator_present.sql` execution to `buildMigratedDb()`.
+
+### Verification
+- Ran `npm test`: All 362 test cases passed (`100% pass rate`).
+
 ---
 
 ## 2026-09-13 22:02 UTC (2026-09-13 17:02 CDT) — Advanced Ecosystem Upgrade (Streams 1, 2, & 3)

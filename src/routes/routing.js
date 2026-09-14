@@ -181,8 +181,17 @@ routing.post('/optimize', async (c) => {
   if (stops.length === 0) {
     return c.json({ error: 'No stops with coordinates to route', unroutable }, 400);
   }
+
+  // Task 2: Auto-truncate stops exceeding LIMITS.routeStops (30) by prioritizing high EPV targets
+  let truncatedStopsCount = 0;
   if (stops.length > LIMITS.routeStops) {
-    return c.json({ error: `Mapbox Optimization accepts at most ${LIMITS.routeStops} stops` }, 400);
+    stops.sort((a, b) => {
+      const epvA = calculateEpv(a, 1.0);
+      const epvB = calculateEpv(b, 1.0);
+      return epvB - epvA;
+    });
+    truncatedStopsCount = stops.length - LIMITS.routeStops;
+    stops = stops.slice(0, LIMITS.routeStops);
   }
 
   const startLat = asLatitude(body?.start?.lat);

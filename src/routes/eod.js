@@ -384,5 +384,136 @@ export async function handleEodAggregates(c) {
 
 eod.get('/aggregates', handleEodAggregates);
 
+// ---------------------------------------------------------------------
+// GET /api/eod-debrief/weekly-pipeline — deterministic pipeline review
+// ---------------------------------------------------------------------
+
+/**
+ * Generates a Markdown "Weekly Pipeline Status" block the agent pastes into
+ * their pipeline review. No AI call — this is deterministic SQL → Markdown,
+ * so it works with zero provider keys.
+ *
+ * Groups active accounts by pipeline stage (PROPOSAL, CLOSED_WON) with
+ * forecast_ap from the companies table (deal-level, not touch-level).
+ */
+eod.get('/weekly-pipeline', async (c) => {
+  const userEmail = c.get('userEmail');
+  if (!userEmail) return c.json({ error: 'Unauthorized' }, 401);
+
+  const today = businessDate();
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT
+      c.company_id,
+      c.company_name,
+      c.pipeline_stage,
+      c.forecast_ap,
+      c.stage_entered_at,
+      CAST(
+        ROUND(julianday('${today}') - julianday(COALESCE(c.stage_entered_at, c.created_at, '${today}')))
+      AS INTEGER) AS days_in_stage,
+      (SELECT al.next_action_text FROM activity_logs al
+       WHERE al.company_id = c.company_id AND al.agent_email = c.agent_email
+       ORDER BY al.timestamp DESC LIMIT 1) AS latest_next_action
+    FROM companies c
+    WHERE c.agent_email = ?
+      AND c.pipeline_stage IN ('PROSPECT', 'ENGAGED', 'QUALIFIED', 'PROPOSAL', 'CLOSED_WON')
+      AND (c.snoozed_until IS NULL OR c.snoozed_until <= '${today}')
+    ORDER BY
+      CASE c.pipeline_stage
+        WHEN 'CLOSED_WON' THEN 1
+        WHEN 'PROPOSAL' THEN 2
+        WHEN 'QUALIFIED' THEN 3
+        WHEN 'ENGAGED' THEN 4
+        WHEN 'PROSPECT' THEN 5
+      END,
+      COALESCE(c.forecast_ap, 0) DESC,
+      c.company_name COLLATE NOCASE
+    LIMIT 500
+  `).bind(userEmail).all();
+
+  const rows = Array.isArray(results) ? results : [];
+
+  if (rows.length === 0) {
+    return c.json({
+      success: true,
+      date: today,
+      markdown: `## Weekly Pipeline Status — ${today}\n\nNo active deals in the pipeline.`,
+      stages: {},
+      total_ap: 0
+    }, 200, { 'Cache-Control': 'no-store' });
+  }
+
+  // Group by stage
+  const grouped = {};
+  let totalAp = 0;
+
+  for (const row of rows) {
+    const stage = row.pipeline_stage;
+    if (!grouped[stage]) grouped[stage] = { rows: [], ap: 0 };
+    grouped[stage].rows.push(row);
+    const ap = Number(row.forecast_ap) || 0;
+    grouped[stage].ap += ap;
+    totalAp += ap;
+  }
+
+  totalAp = Math.round(totalAp * 100) / 100;
+
+  // Build Markdown
+  const lines = [`## Weekly Pipeline Status — ${today}`, ''];
+
+  // Render stages in pipeline order (most advanced first)
+  const STAGE_ORDER = ['CLOSED_WON', 'PROPOSAL', 'QUALIFIED', 'ENGAGED', 'PROSPECT'];
+  for (const stage of STAGE_ORDER) {
+    const group = grouped[stage];
+    if (!group) continue;
+
+    const stageAp = Math.round(group.ap * 100) / 100;
+    const label = stage.replace(/_/g, ' ');
+    lines.push(`### ${label} (${group.rows.length} ${group.rows.length === 1 ? 'account' : 'accounts'} · $${stageAp.toLocaleString('en-US')} projected AP)`);
+    lines.push('');
+    lines.push('| Account | Days in Stage | Projected AP | Next Action |');
+    lines.push('|---------|--------------|-------------|-------------|');
+
+    for (const row of group.rows) {
+      const ap = Number(row.forecast_ap) || 0;
+      const apStr = `$${ap.toLocaleString('en-US')}`;
+      const days = row.days_in_stage ?? '—';
+      const next = row.latest_next_action || '—';
+      lines.push(`| ${row.company_name} | ${days} | ${apStr} | ${next} |`);
+    }
+
+    lines.push('');
+  }
+
+  lines.push(`**Total Pipeline AP: $${totalAp.toLocaleString('en-US')}**`);
+
+  const markdown = lines.join('\n');
+
+  // Structured response for programmatic consumers
+  const stages = {};
+  for (const [stage, group] of Object.entries(grouped)) {
+    stages[stage] = {
+      count: group.rows.length,
+      forecast_ap: Math.round(group.ap * 100) / 100,
+      accounts: group.rows.map((r) => ({
+        company_id: r.company_id,
+        company_name: r.company_name,
+        forecast_ap: Number(r.forecast_ap) || 0,
+        days_in_stage: r.days_in_stage,
+        next_action: r.latest_next_action || null
+      }))
+    };
+  }
+
+  return c.json({
+    success: true,
+    date: today,
+    markdown,
+    stages,
+    total_ap: totalAp
+  }, 200, { 'Cache-Control': 'no-store' });
+});
+
 export default eod;
 export { computeMetrics, fallbackReport };

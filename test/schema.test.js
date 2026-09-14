@@ -139,6 +139,10 @@ function buildMigratedDb() {
   for (const statement of statementsOf('migrations/0006_actionable_callbacks.sql')) {
     raw.exec(statement);
   }
+  // 0007 adds coordinator_present to activity_logs
+  for (const statement of statementsOf('migrations/0007_coordinator_present.sql')) {
+    raw.exec(statement);
+  }
   raw.close();
   return file;
 }

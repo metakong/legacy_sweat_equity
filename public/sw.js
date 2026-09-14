@@ -5,15 +5,13 @@ const CACHE_NAME = 'aflac-prospect-v11';
 // the page registers this tag and this listener is the only thing that answers.
 const SYNC_TAG = 'sync-agency-outbox';
 
-// Copied from state.js deliberately. A Service Worker is a separate global
-// with no import map into the page's module graph, so it cannot import those
-// constants; they are duplicated here under test coverage instead.
-const DB_NAME = 'AgencyOS_DB';
+// Service Worker targeting unified AflacProspectDB queue
+const DB_NAME = 'AflacProspectDB';
 const DB_VERSION = 2;
-const AUDIO_STORE = 'audio_outbox';
-const ACTION_STORE = 'action_outbox';
+const QUEUE_STORE = 'queue';
 const VOICE_DEBRIEF_URL = '/api/voice-debrief';
 const ACTIVITY_URL = '/api/activity';
+const SYNC_URL = '/api/sync';
 
 // Same-origin app shell — install fails if any of these are missing.
 // These are native ES modules; each one is a separate request, so each one
@@ -118,12 +116,7 @@ self.addEventListener('fetch', (e) => {
 // ---------------------------------------------------------------------
 
 /**
- * Open AgencyOS_DB without upgrading it.
- *
- * The version is pinned to 2 to match state.js. The upgrade callback below is
- * the guard that matters: a Service Worker that silently created an empty
- * database would strand every queued capture in the real store, so reaching an
- * upgrade here aborts the open instead of writing anything.
+ * Open AflacProspectDB without upgrading it.
  */
 function openOutboxDatabase() {
   return new Promise((resolve, reject) => {
@@ -140,8 +133,6 @@ function openOutboxDatabase() {
       return;
     }
 
-    // Never create stores here: an upgrade is the page's job, and there is
-    // nothing to drain from a database that does not exist yet.
     request.onupgradeneeded = () => {
       try {
         request.transaction?.abort();
@@ -149,172 +140,199 @@ function openOutboxDatabase() {
     };
 
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error('AgencyOS_DB open failed'));
-    request.onblocked = () => reject(new Error('AgencyOS_DB open blocked'));
+    request.onerror = () => reject(request.error || new Error('AflacProspectDB open failed'));
+    request.onblocked = () => reject(new Error('AflacProspectDB open blocked'));
   });
 }
 
-/** Read every record from one store. A missing store resolves to []. */
-function readAll(db, storeName) {
+/** Read all entries from the queue store. */
+function readQueue(db) {
   return new Promise((resolve, reject) => {
     let tx;
     try {
-      tx = db.transaction([storeName], 'readonly');
+      tx = db.transaction([QUEUE_STORE], 'readonly');
     } catch {
-      // The store does not exist — nothing to drain, not an error.
       resolve([]);
       return;
     }
 
     const records = [];
-    const request = tx.objectStore(storeName).openCursor();
+    const request = tx.objectStore(QUEUE_STORE).openCursor();
     request.onsuccess = (event) => {
       const cursor = event.target.result;
-      // The terminal callback (cursor === null) is NOT the end of the read:
-      // IndexedDB guarantees the transaction commits after the last cursor
-      // step, so resolving here would return a half-read list. The commit below
-      // is the only correct place to resolve.
       if (!cursor) return;
       records.push({ key: cursor.key, value: cursor.value });
       cursor.continue();
     };
-    request.onerror = () => reject(request.error || new Error(`${storeName} read failed`));
+    request.onerror = () => reject(request.error || new Error('queue read failed'));
     tx.oncomplete = () => resolve(records);
-    tx.onerror = () => reject(tx.error || new Error(`${storeName} read failed`));
-    tx.onabort = () => reject(tx.error || new Error(`${storeName} read aborted`));
+    tx.onerror = () => reject(tx.error || new Error('queue read failed'));
+    tx.onabort = () => reject(tx.error || new Error('queue read aborted'));
   });
 }
 
-/** Delete one record and resolve only once the transaction commits. */
-function deleteRecord(db, storeName, key) {
+/** Delete one record from queue by log_id/key. */
+function deleteQueueRecord(db, key) {
   return new Promise((resolve, reject) => {
     let tx;
     try {
-      tx = db.transaction([storeName], 'readwrite');
+      tx = db.transaction([QUEUE_STORE], 'readwrite');
     } catch (err) {
       reject(err);
       return;
     }
 
-    tx.objectStore(storeName).delete(key);
+    tx.objectStore(QUEUE_STORE).delete(key);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(tx.error || new Error(`${storeName} delete failed`));
-    tx.onabort = () => reject(tx.error || new Error(`${storeName} delete aborted`));
+    tx.onerror = () => reject(tx.error || new Error('queue delete failed'));
+    tx.onabort = () => reject(tx.error || new Error('queue delete aborted'));
   });
 }
 
-/** Rebuild the multipart body the voice endpoint expects. */
-function audioFormData(record) {
-  const form = new FormData();
-  const blob = record?.blob;
-  if (!blob) return null;
-
-  form.append('audio', blob, `offline-${record?.timestamp || Date.now()}.webm`);
-  if (record?.company_id) form.append('company_id', record.company_id);
-  if (record?.mode) form.append('mode', record.mode);
-  return form;
-}
-
-/**
- * POST one audio capture. Resolves 'sent' | 'rejected' | 'failed'.
- *
- * A 4xx is terminal: the server will answer the same way forever (a suppressed
- * account, a malformed payload), and retrying it would wedge every later
- * capture behind it. A 5xx or a throw is transient, so the record stays.
- */
-async function postAudio(record) {
-  const form = audioFormData(record);
-  if (!form) return 'rejected';
-
-  try {
-    const response = await fetch(VOICE_DEBRIEF_URL, { method: 'POST', body: form });
-    if (response.status === 200) return 'sent';
-    if (response.status >= 400 && response.status < 500) return 'rejected';
-    return 'failed';
-  } catch {
-    return 'failed';
-  }
-}
-
-/** POST one quick drop. Same status contract as postAudio. */
-async function postAction(record) {
-  try {
-    const response = await fetch(ACTIVITY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(record)
-    });
-    if (response.status === 200) return 'sent';
-    if (response.status >= 400 && response.status < 500) return 'rejected';
-    return 'failed';
-  } catch {
-    return 'failed';
-  }
-}
-
-/** Walk one store, POSTing each record and removing what the server accepted. */
-async function drainStore(db, storeName, post) {
-  const records = await readAll(db, storeName);
-  const summary = { attempted: 0, sent: 0, rejected: 0, failed: 0 };
-
-  for (const entry of records) {
-    summary.attempted += 1;
-    const outcome = await post(entry.value);
-
-    if (outcome === 'failed') {
-      summary.failed += 1;
-      // Preserve FIFO: a later record may depend on an earlier one landing, and
-      // hammering a dead connection with the rest of the queue only burns the
-      // browser's short sync budget.
-      break;
-    }
-
-    // 'sent' and 'rejected' both mean "stop trying this one".
+async function postQueueEntry(entry) {
+  if (entry.type === 'company_creation') {
     try {
-      await deleteRecord(db, storeName, entry.key);
+      const payload = entry.payload || {
+        company_id: entry.company_id,
+        company_name: entry.company_name,
+        lat: entry.lat,
+        long: entry.long ?? entry.lng,
+        street_1: entry.street_1,
+        city: entry.city,
+        state: entry.state,
+        zip_code: entry.zip_code
+      };
+      const res = await fetch('/api/companies/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companies: [payload] })
+      });
+      if (res.status === 200) return 'sent';
+      if (res.status >= 400 && res.status < 500) return 'rejected';
+      return 'failed';
     } catch {
-      summary.failed += 1;
-      continue;
+      return 'failed';
     }
+  } else if (entry.type === 'voice_debrief' || entry.audioBlob || entry.blob) {
+    try {
+      const form = new FormData();
+      const baseBlob = entry.blob || entry.audioBlob;
+      if (!baseBlob) return 'rejected';
+      const base = String(baseBlob?.type || '').split(';')[0].trim().toLowerCase();
+      const stamp = String(entry.timestamp || new Date().toISOString()).replace(/[:.]/g, '-');
+      const ext = base.includes('ogg') ? 'ogg' : 'webm';
 
-    if (outcome === 'sent') summary.sent += 1;
-    else summary.rejected += 1;
+      if (entry.type === 'voice_debrief') {
+        form.append('audio', baseBlob, `debrief-${stamp}.${ext}`);
+        if (entry.company_id) form.append('company_id', entry.company_id);
+        if (entry.mode) form.append('mode', entry.mode);
+        if (entry.timestamp) form.append('timestamp', entry.timestamp);
+        const res = await fetch(VOICE_DEBRIEF_URL, { method: 'POST', body: form });
+        if (res.status === 200) return 'sent';
+        if (res.status >= 400 && res.status < 500) return 'rejected';
+        return 'failed';
+      } else {
+        form.append('audio', baseBlob, `journal-${entry.log_id || stamp}.${ext}`);
+        form.append('is_in_person', String(entry.is_in_person ?? 1));
+        form.append('is_initial', String(entry.is_initial ?? 1));
+        form.append('is_dm_contact', String(entry.is_dm_contact ?? 0));
+        if (entry.log_id) form.append('log_id', entry.log_id);
+        if (entry.timestamp) form.append('timestamp', entry.timestamp);
+        if (entry.company_id) form.append('company_id', entry.company_id);
+        if (entry.contact_id) form.append('contact_id', entry.contact_id);
+        if (entry.manual_disposition) form.append('manual_disposition', entry.manual_disposition);
+        if (entry.company) {
+          const compStr = typeof entry.company === 'string' ? entry.company : JSON.stringify(entry.company);
+          form.append('company', compStr);
+        }
+        const res = await fetch('/api/transcribe-and-log', { method: 'POST', body: form });
+        if (res.status === 200) return 'sent';
+        if (res.status >= 400 && res.status < 500) return 'rejected';
+        return 'failed';
+      }
+    } catch {
+      return 'failed';
+    }
+  } else if (entry.type === 'quick_action') {
+    try {
+      const res = await fetch(ACTIVITY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: entry.company_id,
+          disposition: entry.disposition,
+          mode: entry.mode,
+          next_action: entry.next_action,
+          next_action_date: entry.next_action_date,
+          timestamp: entry.timestamp
+        })
+      });
+      if (res.status === 200) return 'sent';
+      if (res.status >= 400 && res.status < 500) return 'rejected';
+      return 'failed';
+    } catch {
+      return 'failed';
+    }
+  } else {
+    try {
+      const { audioBlob, audioType, attempts, last_error, last_attempt_at, ...payload } = entry;
+      const res = await fetch(SYNC_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logs: [payload] })
+      });
+      if (res.status === 200) return 'sent';
+      if (res.status >= 400 && res.status < 500) return 'rejected';
+      return 'failed';
+    } catch {
+      return 'failed';
+    }
   }
-
-  return summary;
 }
 
-/**
- * Drain both outboxes. Never rejects — a rejected sync event would make the
- * browser retry the tag with the same records, which is precisely the loop the
- * 'failed' handling above exists to avoid.
- */
+/** Drain AflacProspectDB queue store. */
 async function drainOutbox() {
   let db = null;
   try {
     db = await openOutboxDatabase();
   } catch {
-    return { audio: null, action: null };
+    return { attempted: 0, sent: 0, failed: 0 };
   }
 
+  if (!db) return { attempted: 0, sent: 0, failed: 0 };
+
+  const summary = { attempted: 0, sent: 0, rejected: 0, failed: 0 };
+
   try {
-    return {
-      audio: await drainStore(db, AUDIO_STORE, postAudio),
-      action: await drainStore(db, ACTION_STORE, postAction)
-    };
-  } catch {
-    return { audio: null, action: null };
+    const records = await readQueue(db);
+    records.sort((a, b) => new Date(a.value?.timestamp || 0) - new Date(b.value?.timestamp || 0));
+
+    for (const item of records) {
+      summary.attempted += 1;
+      const outcome = await postQueueEntry(item.value);
+      if (outcome === 'failed') {
+        summary.failed += 1;
+        break; // preserve FIFO order on network/transient failure
+      }
+      try {
+        await deleteQueueRecord(db, item.key);
+      } catch {
+        summary.failed += 1;
+        continue;
+      }
+      if (outcome === 'sent') summary.sent += 1;
+      else summary.rejected += 1;
+    }
+  } catch (err) {
+    console.warn('Background sync queue drain error:', err);
   } finally {
-    try {
-      db.close();
-    } catch { /* already closing */ }
+    try { db.close(); } catch {}
   }
+  return summary;
 }
 
 self.addEventListener('sync', (event) => {
   if (event.tag !== SYNC_TAG) return;
-  // waitUntil keeps the worker alive until the drain finishes; without it the
-  // browser is free to terminate the worker mid-upload.
   event.waitUntil(drainOutbox());
 });
 
