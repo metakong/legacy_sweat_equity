@@ -144,7 +144,16 @@ export function normalizeCompany(raw) {
     // A record only counts as synced once it carries the D365 identity that
     // proves it round-tripped. Trusting a client-sent flag here is how
     // net-new leads silently drop out of the Tier 3 export.
-    is_d365_synced: toBool(raw?.is_d365_synced) && cleanCapped(raw?.d365_lead_id, LIMITS.d365Id) ? 1 : 0
+    is_d365_synced: toBool(raw?.is_d365_synced) && cleanCapped(raw?.d365_lead_id, LIMITS.d365Id) ? 1 : 0,
+    // --- Phase 3 Enterprise: Cadence & Section 125 & Offline Vectors ---
+    cadence_stage: asCount(raw?.cadence_stage, 12) ?? 0,
+    cadence_status: cleanCapped(raw?.cadence_status, 20) || 'INACTIVE',
+    cadence_next_due_date: asIsoDate(raw?.cadence_next_due_date) || null,
+    cadence_last_touch_at: cleanCapped(raw?.cadence_last_touch_at, 40) || null,
+    est_fica_tax_savings: asMoney(raw?.est_fica_tax_savings) ?? 0.00,
+    teaser_check_generated_at: cleanCapped(raw?.teaser_check_generated_at, 40) || null,
+    sync_version: asCount(raw?.sync_version, 1000000) ?? 1,
+    updated_at_utc: cleanCapped(raw?.updated_at_utc, 40) || null
   };
 }
 
@@ -155,9 +164,9 @@ export function normalizeCompany(raw) {
  * only what the agent retyped, and must not blank out an enrichment result or
  * a D365 identity captured earlier.
  */
-export async function upsertCompany(db, company, userEmail) {
+export function buildCompanyStatement(db, company, userEmail) {
   userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
-  await db.prepare(`
+  return db.prepare(`
     INSERT INTO companies (
       company_id, d365_lead_id, d365_checksum, d365_modified_on, company_name,
       street_1, street_2, city, state, zip_code, lat, long,
@@ -168,11 +177,11 @@ export async function upsertCompany(db, company, userEmail) {
       company_phone, decision_maker, notes,
       current_voluntary_carrier, major_medical_carrier, is_hdhp,
       estimated_w2_count, confidence_score, geohash, status,
-      next_action, next_action_date,
+      next_action, next_action_date, sync_version,
       agent_email
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(company_id, agent_email) DO UPDATE SET
       d365_lead_id        = COALESCE(excluded.d365_lead_id, companies.d365_lead_id),
@@ -184,12 +193,6 @@ export async function upsertCompany(db, company, userEmail) {
       city                = COALESCE(excluded.city, companies.city),
       state               = COALESCE(excluded.state, companies.state),
       zip_code            = COALESCE(excluded.zip_code, companies.zip_code),
-      -- Incoming coordinates win when they are actually supplied; a payload
-      -- that omits them (excluded.* IS NULL) still keeps what we hold. The
-      -- old order was existing-first, which meant a row geocoded to the wrong
-      -- rooftop could never be corrected through ANY import path — the agent
-      -- had to edit D1 by hand. handleImport only geocodes accounts that lack
-      -- coordinates, so this does not re-geocode on every re-import.
       lat                 = COALESCE(excluded.lat, companies.lat),
       long                = COALESCE(excluded.long, companies.long),
       lead_source         = COALESCE(excluded.lead_source, companies.lead_source),
@@ -209,35 +212,21 @@ export async function upsertCompany(db, company, userEmail) {
       is_d365_synced      = MAX(excluded.is_d365_synced, companies.is_d365_synced),
       company_phone       = COALESCE(excluded.company_phone, companies.company_phone),
       decision_maker      = COALESCE(excluded.decision_maker, companies.decision_maker),
-      -- Notes ACCUMULATE. Each enrichment pass is a new observation about a
-      -- live account, not a correction of the last one, so overwriting would
-      -- destroy the history the agent is actually working from. The instr()
-      -- guard keeps this idempotent: re-running the same import appends
-      -- nothing, so a retried batch cannot balloon the field.
       notes = CASE
         WHEN excluded.notes IS NULL OR TRIM(excluded.notes) = '' THEN companies.notes
         WHEN companies.notes IS NULL OR TRIM(companies.notes) = '' THEN excluded.notes
         WHEN instr(companies.notes, excluded.notes) > 0 THEN companies.notes
         ELSE companies.notes || char(10) || char(10) || excluded.notes
       END,
-      -- V2 Agency OS fields. The defaults above keep a NEW row valid, so the
-      -- presence flags below are what stop a quick field re-log from resetting
-      -- a phone-verified confidence score back to 30 or clearing a
-      -- DO_NOT_CONTACT suppression. Bind order: the six flags are positional
-      -- parameters appearing after the 38 INSERT values.
       current_voluntary_carrier = CASE WHEN ? = 1 THEN excluded.current_voluntary_carrier ELSE companies.current_voluntary_carrier END,
       major_medical_carrier     = CASE WHEN ? = 1 THEN excluded.major_medical_carrier     ELSE companies.major_medical_carrier     END,
       is_hdhp                   = CASE WHEN ? = 1 THEN excluded.is_hdhp                   ELSE companies.is_hdhp                   END,
       estimated_w2_count        = CASE WHEN ? = 1 THEN excluded.estimated_w2_count        ELSE companies.estimated_w2_count        END,
       confidence_score          = CASE WHEN ? = 1 THEN excluded.confidence_score          ELSE companies.confidence_score          END,
       status                    = CASE WHEN ? = 1 THEN excluded.status                    ELSE companies.status                    END,
-      -- Sprint 6 callback pointer. Same presence-guard contract: only a payload
-      -- that actually carried a commitment may move the pointer.
       next_action               = CASE WHEN ? = 1 THEN excluded.next_action               ELSE companies.next_action               END,
       next_action_date          = CASE WHEN ? = 1 THEN excluded.next_action_date          ELSE companies.next_action_date          END,
-      -- Spatial: a full coordinate pair re-derives the hash, a payload with no
-      -- coordinates leaves it alone, and a HALF-supplied pair clears it rather
-      -- than leaving a hash that no longer describes where the account is.
+      sync_version              = MAX(COALESCE(excluded.sync_version, 1), companies.sync_version),
       geohash = CASE
         WHEN excluded.lat IS NOT NULL AND excluded.long IS NOT NULL THEN excluded.geohash
         WHEN excluded.lat IS NULL     AND excluded.long IS NULL     THEN companies.geohash
@@ -274,7 +263,6 @@ export async function upsertCompany(db, company, userEmail) {
     company.company_phone ?? null,
     company.decision_maker ?? null,
     company.notes ?? null,
-    // V2 Agency OS columns.
     company.current_voluntary_carrier ?? 'None',
     company.major_medical_carrier ?? null,
     company.is_hdhp ?? 0,
@@ -284,8 +272,8 @@ export async function upsertCompany(db, company, userEmail) {
     company.status ?? 'ACTIVE',
     company.next_action ?? null,
     company.next_action_date ?? null,
+    company.sync_version ?? 1,
     userEmail,
-    // Presence flags consumed by the CASE expressions above, in order.
     company.__has_current_voluntary_carrier ?? 0,
     company.__has_major_medical_carrier ?? 0,
     company.__has_is_hdhp ?? 0,
@@ -294,8 +282,12 @@ export async function upsertCompany(db, company, userEmail) {
     company.__has_status ?? 0,
     company.__has_next_action ?? 0,
     company.__has_next_action_date ?? 0
-  ).run();
+  );
+}
 
+export async function upsertCompany(db, company, userEmail) {
+  const stmt = buildCompanyStatement(db, company, userEmail);
+  await stmt.run();
   return company.company_id;
 }
 
@@ -630,7 +622,9 @@ export function normalizeActivityLog(raw) {
     sync_tier_status: matchEnum(raw?.sync_tier_status, SYNC_TIERS) || 'PENDING',
     coordinator_present: toBool(raw?.coordinator_present),
     next_action_date: asIsoDate(raw?.next_action_date) || null,
-    next_action_text: cleanCapped(raw?.next_action_text, 300) || null
+    next_action_text: cleanCapped(raw?.next_action_text, 300) || null,
+    sync_version: asCount(raw?.sync_version, 1000000) ?? 1,
+    client_timestamp_utc: cleanCapped(raw?.client_timestamp_utc, 40) || null
   };
 }
 
@@ -638,16 +632,17 @@ export function normalizeActivityLog(raw) {
  * Idempotent by log_id: the offline queue retries the same client-generated id
  * after a dropped connection, and that must update rather than duplicate.
  */
-export async function upsertActivityLog(db, log, userEmail) {
+export function buildActivityLogStatement(db, log, userEmail) {
   userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
-  await db.prepare(`
+  return db.prepare(`
     INSERT INTO activity_logs (
       log_id, company_id, contact_id, timestamp,
       is_in_person, is_initial, is_dm_contact, disposition,
       presentation_date, enrollment_date, projected_ap,
       raw_audio_transcription, ai_structured_notes, sync_tier_status,
-      coordinator_present, next_action_date, next_action_text, agent_email
-    ) VALUES (?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      coordinator_present, next_action_date, next_action_text,
+      client_timestamp_utc, sync_version, agent_email
+    ) VALUES (?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(log_id, agent_email) DO UPDATE SET
       contact_id              = COALESCE(excluded.contact_id, activity_logs.contact_id),
       is_in_person            = excluded.is_in_person,
@@ -662,7 +657,11 @@ export async function upsertActivityLog(db, log, userEmail) {
       sync_tier_status        = excluded.sync_tier_status,
       coordinator_present     = excluded.coordinator_present,
       next_action_date        = COALESCE(excluded.next_action_date, activity_logs.next_action_date),
-      next_action_text        = COALESCE(excluded.next_action_text, activity_logs.next_action_text)
+      next_action_text        = COALESCE(excluded.next_action_text, activity_logs.next_action_text),
+      client_timestamp_utc    = COALESCE(excluded.client_timestamp_utc, activity_logs.client_timestamp_utc),
+      sync_version            = MAX(COALESCE(excluded.sync_version, 1), activity_logs.sync_version)
+    WHERE excluded.sync_version >= activity_logs.sync_version
+       OR COALESCE(excluded.client_timestamp_utc, '') >= COALESCE(activity_logs.client_timestamp_utc, '')
   `).bind(
     log.log_id,
     log.company_id,
@@ -681,9 +680,15 @@ export async function upsertActivityLog(db, log, userEmail) {
     log.coordinator_present ?? 0,
     log.next_action_date ?? null,
     log.next_action_text ?? null,
+    log.client_timestamp_utc ?? null,
+    log.sync_version ?? 1,
     userEmail
-  ).run();
+  );
+}
 
+export async function upsertActivityLog(db, log, userEmail) {
+  const stmt = buildActivityLogStatement(db, log, userEmail);
+  await stmt.run();
   return log.log_id;
 }
 

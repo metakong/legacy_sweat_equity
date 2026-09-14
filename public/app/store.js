@@ -119,6 +119,12 @@ export function enqueue(entry) {
   if (!entry.timestamp) {
     entry.timestamp = new Date().toISOString();
   }
+  if (!entry.client_timestamp_utc) {
+    entry.client_timestamp_utc = new Date().toISOString();
+  }
+  if (entry.sync_version === undefined || entry.sync_version === null) {
+    entry.sync_version = 1;
+  }
   return new Promise((resolve, reject) => {
     if (!db) return reject(new Error('Local storage is still initializing'));
     let tx;

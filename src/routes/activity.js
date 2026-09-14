@@ -36,6 +36,8 @@ import {
   upsertCompany,
   upsertContact,
   upsertActivityLog,
+  buildCompanyStatement,
+  buildActivityLogStatement,
   setCompanyRating,
   setCompanyRenewalDate,
   calculateRenewalDate,
@@ -682,21 +684,149 @@ root.post('/sync', async (c) => {
   const accepted = [];
   const rejected = [];
 
+  // Group operations into atomic batches of <= 25 statements
+  const BATCH_CHUNK_LIMIT = 25;
+  let batchChunk = [];
+  let pendingLogIds = [];
+
+  async function flushBatch() {
+    if (batchChunk.length === 0) return;
+    const statements = batchChunk;
+    const logIds = pendingLogIds;
+    batchChunk = [];
+    pendingLogIds = [];
+
+    try {
+      const results = await c.env.DB.batch(statements);
+      // Verify atomic execution via results array
+      if (Array.isArray(results)) {
+        for (const id of logIds) {
+          if (!accepted.includes(id)) accepted.push(id);
+        }
+      }
+    } catch (batchErr) {
+      console.error('D1 atomic batch sync chunk failed:', batchErr);
+      // Infrastructure error allows offline queue retry - do not reject
+    }
+  }
+
   for (const entry of logs) {
     try {
-      const result = await writeQueuedLog(c.env, entry, userEmail);
-      accepted.push(result.log_id);
+      let companyId = asId(entry?.company_id);
+      const entryStatements = [];
+
+      if (entry?.company) {
+        let parsedCompany = entry.company;
+        if (typeof parsedCompany === 'string') {
+          const trimmed = parsedCompany.trim();
+          if (trimmed && trimmed !== 'undefined' && trimmed !== 'null') {
+            try {
+              parsedCompany = JSON.parse(trimmed);
+            } catch {
+              throw new ValidationError('Malformed company JSON payload');
+            }
+          } else {
+            parsedCompany = null;
+          }
+        }
+        if (parsedCompany && typeof parsedCompany === 'object') {
+          const companyPayload = { ...parsedCompany, company_id: companyId || parsedCompany.company_id };
+          if ((!companyPayload.lat || !companyPayload.long) && companyPayload.street_1) {
+            const fullAddress = [companyPayload.street_1, companyPayload.city || 'Springfield', companyPayload.state || 'MO', companyPayload.zip_code]
+              .filter(Boolean)
+              .join(', ');
+            try {
+              const coords = await geocodeAddress(c.env, fullAddress);
+              if (coords) {
+                companyPayload.lat = coords.lat;
+                companyPayload.long = coords.long;
+              }
+            } catch (geoErr) {
+              console.warn('Geocoding address failed (non-fatal):', geoErr);
+            }
+          }
+          const company = normalizeCompany(companyPayload);
+          entryStatements.push(buildCompanyStatement(c.env.DB, company, userEmail));
+          companyId = company.company_id;
+        }
+      }
+
+      if (!companyId) throw new ValidationError('company_id or company payload is required');
+      if (!entry?.company && !(await companyExists(c.env.DB, companyId, userEmail))) {
+        throw new ValidationError('Unknown company_id');
+      }
+
+      let contactId = asId(entry?.contact_id);
+      if (entry?.contact) {
+        const contact = normalizeContact(entry.contact, companyId);
+        if (contact) {
+          contactId = await upsertContact(c.env.DB, contact, userEmail);
+        }
+      }
+
+      const log = normalizeActivityLog({
+        ...entry,
+        disposition: entry?.manual_disposition || entry?.disposition,
+        company_id: companyId,
+        contact_id: contactId
+      });
+
+      entryStatements.push(buildActivityLogStatement(c.env.DB, log, userEmail));
+
+      if (entry?.rating) {
+        const canonicalRating = matchEnum(entry.rating, RATINGS);
+        if (canonicalRating) {
+          entryStatements.push(c.env.DB.prepare(
+            'UPDATE companies SET rating = ? WHERE company_id = ? AND agent_email = ?'
+          ).bind(canonicalRating, companyId, userEmail));
+        }
+      }
+
+      if (log.disposition === 'Enrolled') {
+        const renewalDate = calculateRenewalDate(log.enrollment_date, log.timestamp?.slice(0, 10));
+        if (renewalDate) {
+          entryStatements.push(c.env.DB.prepare(
+            'UPDATE companies SET renewal_date = ? WHERE company_id = ? AND agent_email = ?'
+          ).bind(renewalDate, companyId, userEmail));
+        }
+      }
+
+      // If adding this entry's statements would exceed BATCH_CHUNK_LIMIT, flush existing batch first
+      if (batchChunk.length + entryStatements.length > BATCH_CHUNK_LIMIT && batchChunk.length > 0) {
+        await flushBatch();
+      }
+
+      for (const stmt of entryStatements) {
+        batchChunk.push(stmt);
+      }
+      pendingLogIds.push(log.log_id);
+
+      if (batchChunk.length >= BATCH_CHUNK_LIMIT) {
+        await flushBatch();
+      }
+
+      // Non-blocking auto-advance pipeline stage
+      try {
+        const targetStage = inferTargetPipelineStage(null, log.disposition, log.is_dm_contact);
+        if (targetStage) {
+          await autoAdvancePipelineStage(c.env.DB, companyId, targetStage, userEmail, log.log_id, `Auto-advanced on touch (${log.disposition})`);
+        }
+      } catch (pipeErr) {
+        console.error('Auto-advance pipeline stage failed (non-fatal):', pipeErr);
+      }
+
     } catch (err) {
       const clientId = typeof entry?.log_id === 'string' ? entry.log_id.slice(0, 64) : null;
       if (err instanceof ValidationError) {
         rejected.push({ log_id: clientId, reason: err.message });
       } else {
-        // An infrastructure failure is retryable — do NOT tell the client to
-        // discard the record. Leave it out of both lists so it stays queued.
         console.error('Sync entry failed:', err);
       }
     }
   }
+
+  // Flush any remaining statements
+  await flushBatch();
 
   return c.json({
     success: true,

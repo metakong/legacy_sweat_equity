@@ -81,6 +81,14 @@ CREATE TABLE IF NOT EXISTS companies (
             'UNVERIFIED', 'PHONE_VERIFIED', 'FIELD_VERIFIED', 'DISQUALIFIED'
         )
     ),
+    cadence_stage INTEGER DEFAULT 0,
+    cadence_status TEXT DEFAULT 'INACTIVE' CHECK (cadence_status IN ('INACTIVE', 'ACTIVE', 'PAUSED', 'COMPLETED', 'DISQUALIFIED')),
+    cadence_next_due_date TEXT,
+    cadence_last_touch_at TEXT,
+    est_fica_tax_savings REAL DEFAULT 0.00,
+    teaser_check_generated_at TEXT,
+    sync_version INTEGER DEFAULT 1,
+    updated_at_utc TEXT DEFAULT (datetime('now')),
     created_at TEXT DEFAULT (datetime('now')),
     agent_email TEXT NOT NULL DEFAULT 'sean_deardorff@us.aflac.com',
     PRIMARY KEY (company_id, agent_email)
@@ -122,6 +130,8 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     coordinator_present BOOLEAN DEFAULT 0,
     next_action_date TEXT,
     next_action_text TEXT,
+    sync_version INTEGER DEFAULT 1,
+    client_timestamp_utc TEXT,
     agent_email TEXT NOT NULL DEFAULT 'sean_deardorff@us.aflac.com',
     PRIMARY KEY (log_id, agent_email),
     FOREIGN KEY (company_id, agent_email) REFERENCES companies(company_id, agent_email)
@@ -183,6 +193,16 @@ CREATE INDEX IF NOT EXISTS idx_companies_agent_confidence
 CREATE INDEX IF NOT EXISTS idx_companies_callback
     ON companies(agent_email, next_action_date)
     WHERE next_action_date IS NOT NULL;
+
+-- Fast Indices for Geofencing & Cadence Sweeps (Phase 3 Enterprise)
+CREATE INDEX IF NOT EXISTS idx_companies_cadence_sweep 
+ON companies (agent_email, cadence_status, cadence_next_due_date) 
+WHERE cadence_status = 'ACTIVE';
+
+CREATE INDEX IF NOT EXISTS idx_companies_spatial_active 
+ON companies (agent_email, status, lat, long) 
+WHERE status = 'ACTIVE' AND lat IS NOT NULL AND long IS NOT NULL;
+
 
 -- ---------------------------------------------------------------------
 -- 5. PIPELINE EVENTS — audit log for stage transitions.
@@ -277,4 +297,18 @@ CREATE TABLE IF NOT EXISTS d365_daily_aggregates (
 --   ALTER TABLE companies ADD COLUMN company_phone TEXT;
 --   ALTER TABLE companies ADD COLUMN decision_maker TEXT;
 --   ALTER TABLE companies ADD COLUMN notes TEXT;
+--
+-- Phase 3 Enterprise (cadence, tax, conflict resolution, migrations/0008_phase3_enterprise.sql):
+--   ALTER TABLE companies ADD COLUMN cadence_stage INTEGER DEFAULT 0;
+--   ALTER TABLE companies ADD COLUMN cadence_status TEXT DEFAULT 'INACTIVE' CHECK (cadence_status IN ('INACTIVE', 'ACTIVE', 'PAUSED', 'COMPLETED', 'DISQUALIFIED'));
+--   ALTER TABLE companies ADD COLUMN cadence_next_due_date TEXT;
+--   ALTER TABLE companies ADD COLUMN cadence_last_touch_at TEXT;
+--   ALTER TABLE companies ADD COLUMN est_fica_tax_savings REAL DEFAULT 0.00;
+--   ALTER TABLE companies ADD COLUMN teaser_check_generated_at TEXT;
+--   ALTER TABLE companies ADD COLUMN sync_version INTEGER DEFAULT 1;
+--   ALTER TABLE companies ADD COLUMN updated_at_utc TEXT DEFAULT (datetime('now'));
+--   ALTER TABLE activity_logs ADD COLUMN sync_version INTEGER DEFAULT 1;
+--   ALTER TABLE activity_logs ADD COLUMN client_timestamp_utc TEXT;
+--   CREATE INDEX IF NOT EXISTS idx_companies_cadence_sweep ...;
+--   CREATE INDEX IF NOT EXISTS idx_companies_spatial_active ...;
 

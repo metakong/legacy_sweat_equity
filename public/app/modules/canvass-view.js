@@ -21,7 +21,7 @@
  * without a third-party dependency on the critical path.
  */
 
-import { el, apiPost, showToast } from '../ui.js';
+import { el, apiPost, showToast, showUndoToast } from '../ui.js';
 import { createVoiceWidget } from './voice-widget.js';
 
 export const LEADS_ENDPOINT = '/api/leads';
@@ -505,25 +505,45 @@ export function mountCanvassView(container, options = {}) {
         attrs: { type: 'button', style: 'margin-top: 8px; padding: 4px 8px; font-size: 13px;' },
         on: {
           click: async (e) => {
-            if (!confirm(`Disqualify ${stop.company_name}?`)) return;
             const btn = e.target;
-            const prevText = btn.textContent;
-            try {
-              btn.disabled = true;
-              btn.textContent = '...';
-              await apiPost('/api/leads/disqualify', {
-                company_id: stop.company_id,
-                reason: 'Field disqualification'
-              });
-              showToast(`${stop.company_name} disqualified.`, 'success');
-              // Remove the li from the list
-              const li = btn.closest('li');
-              if (li) li.remove();
-            } catch (err) {
-              showToast(err.message, 'error');
-              btn.disabled = false;
-              btn.textContent = prevText;
-            }
+            const li = btn.closest('li');
+            if (li) li.style.display = 'none';
+
+            let committed = false;
+            const targetId = stop.company_id;
+            const cName = stop.company_name || 'Account';
+
+            const timeoutId = setTimeout(async () => {
+              committed = true;
+              try {
+                await apiPost('/api/leads/disqualify', {
+                  company_id: targetId,
+                  reason: 'Field disqualification'
+                });
+                if (li) li.remove();
+              } catch (err) {
+                console.error('Background disqualification failed:', err);
+                if (li) li.style.display = '';
+                showToast(err.message, 'error');
+              }
+            }, 6000);
+
+            showUndoToast({
+              message: `Disqualified ${cName}`,
+              durationMs: 6000,
+              onUndo: async () => {
+                clearTimeout(timeoutId);
+                if (li) li.style.display = '';
+                if (committed) {
+                  try {
+                    await apiPost('/api/leads/reactivate', { company_id: targetId });
+                  } catch {
+                    /* best-effort */
+                  }
+                }
+                showToast(`Reactivated ${cName}.`, 'success');
+              }
+            });
           }
         }
       });

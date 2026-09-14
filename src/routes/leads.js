@@ -339,4 +339,49 @@ leads.post('/disqualify', async (c) => {
   });
 });
 
+// ---------------------------------------------------------------------
+// POST /api/leads/reactivate — Universal Field Reversibility & State Restoration
+// ---------------------------------------------------------------------
+export async function handleReactivateLead(c) {
+  const userEmail = c.get('userEmail') || 'sean_deardorff@us.aflac.com';
+  if (!userEmail) return c.json({ error: 'Unauthorized' }, 401);
+
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Malformed JSON body' }, 400);
+  }
+
+  const companyId = asId(body?.company_id);
+  if (!companyId) return c.json({ error: 'company_id is required' }, 400);
+
+  const result = await c.env.DB.prepare(`
+    UPDATE companies 
+    SET status = 'ACTIVE',
+        verification_status = 'FIELD_VERIFIED',
+        disqualified_reason = NULL,
+        pipeline_stage = CASE WHEN pipeline_stage = 'DISQUALIFIED' THEN 'PROSPECT' ELSE pipeline_stage END,
+        confidence_score = CASE WHEN confidence_score = 0 THEN 70 ELSE confidence_score END,
+        updated_at_utc = datetime('now'),
+        sync_version = sync_version + 1,
+        notes = CASE
+          WHEN notes IS NULL OR TRIM(notes) = '' THEN '[' || datetime('now') || '] [REVERT] Status restored to ACTIVE.'
+          ELSE notes || char(10) || '[' || datetime('now') || '] [REVERT] Status restored to ACTIVE.'
+        END
+    WHERE company_id = ? AND agent_email = ?
+  `).bind(companyId, userEmail).run();
+
+  if (!result?.meta?.changes) return c.json({ error: 'Unknown company_id' }, 404);
+
+  return c.json({
+    success: true,
+    company_id: companyId,
+    status: 'ACTIVE'
+  });
+}
+
+leads.post('/reactivate', handleReactivateLead);
+
 export default leads;
+

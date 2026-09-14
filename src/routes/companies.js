@@ -24,8 +24,11 @@ import {
 import { CompanyMatcher } from '../lib/match.js';
 import { geocodeAddress, classifyIndustry } from '../lib/ai.js';
 import { businessDate, businessDayRangeUtc } from '../lib/time.js';
+import { handleReactivateLead } from './leads.js';
 
 const companies = new Hono();
+
+companies.post('/reactivate', handleReactivateLead);
 
 /**
  * GET /api/companies

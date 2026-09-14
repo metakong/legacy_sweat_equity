@@ -47,23 +47,52 @@ export const INDUSTRY_MULTIPLIERS = {
 
 export function getIndustryMultiplier(industry) {
   if (!industry || typeof industry !== 'string') return 1.0;
-  return INDUSTRY_MULTIPLIERS[industry.trim()] || 1.0;
+  const trimmed = industry.trim();
+  if (INDUSTRY_MULTIPLIERS[trimmed]) return INDUSTRY_MULTIPLIERS[trimmed];
+  const lower = trimmed.toLowerCase();
+  if (lower.includes('construct') || lower.includes('trade') || lower.includes('roof')) return 2.0;
+  if (lower.includes('manufactur') || lower.includes('tool') || lower.includes('die') || lower.includes('metal') || lower.includes('fab')) return 1.8;
+  if (lower.includes('transport') || lower.includes('logistic') || lower.includes('warehous') || lower.includes('truck')) return 1.7;
+  if (lower.includes('health') || lower.includes('medic') || lower.includes('dental') || lower.includes('veterin')) return 1.6;
+  if (lower.includes('auto') || lower.includes('dealer') || lower.includes('body shop') || lower.includes('repair')) return 1.5;
+  if (lower.includes('agri') || lower.includes('forest') || lower.includes('mining')) return 1.5;
+  if (lower.includes('hospit') || lower.includes('food') || lower.includes('wholesale') || lower.includes('distrib') || lower.includes('util')) return 1.3;
+  if (lower.includes('real estate') || lower.includes('retail') || lower.includes('personal') || lower.includes('entertain')) return 1.1;
+  return 1.0;
 }
 
 export function calculateEpv(target, distanceMiles) {
-  const employees = (target?.employees !== null && target?.employees !== undefined && Number(target.employees) > 0)
-    ? Number(target.employees)
-    : 5;
+  let count;
+  if (target?.employees !== null && target?.employees !== undefined && Number(target.employees) > 0) {
+    count = Math.max(Number(target.employees), 3);
+  } else if (target?.estimated_w2_count !== null && target?.estimated_w2_count !== undefined && Number(target.estimated_w2_count) > 0) {
+    count = Math.max(Number(target.estimated_w2_count), 3);
+  } else if (target && ('employees' in target || 'estimated_w2_count' in target)) {
+    count = 3;
+  } else {
+    // Default fallback when neither property was provided on target
+    count = 5;
+  }
   const mult = getIndustryMultiplier(target?.industry);
   const dist = (distanceMiles !== null && distanceMiles !== undefined && Number.isFinite(distanceMiles))
     ? distanceMiles
     : 1.0;
-  const score = (employees * mult) / (dist + 0.5);
+  const score = (count * mult) / (dist + 0.5);
   return Math.round(score * 10) / 10;
 }
 
+export function buildIndustryHook(industry) {
+  const mult = getIndustryMultiplier(industry);
+  if (mult >= 2.0) return 'Section 125 FICA Tax Offset for Construction & High-Risk Trades';
+  if (mult >= 1.8) return 'Section 125 FICA Tax Offset for Fabrication & Manufacturing';
+  if (mult >= 1.7) return 'Section 125 FICA Tax Offset for Transport & Warehousing';
+  if (mult >= 1.6) return 'Section 125 FICA Tax Offset for Healthcare & Clinical Staff';
+  if (mult >= 1.5) return 'Section 125 FICA Tax Offset for Auto Dealerships & Technicians';
+  return `Section 125 FICA Tax Offset for ${industry || 'Commercial Businesses'}`;
+}
+
 /** Great-circle distance in miles. */
-function haversineMiles(a, b) {
+export function haversineMiles(a, b) {
   const toRad = (deg) => (deg * Math.PI) / 180;
   const dLat = toRad(b.lat - a.lat);
   const dLon = toRad(b.long - a.long);
@@ -73,7 +102,7 @@ function haversineMiles(a, b) {
   return 2 * EARTH_RADIUS_MI * Math.asin(Math.sqrt(h));
 }
 
-const tourLength = (stops) => stops.reduce(
+export const tourLength = (stops) => stops.reduce(
   (total, stop, i) => (i === 0 ? 0 : total + haversineMiles(stops[i - 1], stop)),
   0
 );
@@ -83,7 +112,7 @@ const tourLength = (stops) => stops.reduce(
  * segment reversal remains. Index 0 is pinned — it is where the agent is
  * standing right now.
  */
-function heuristicSequence(stops) {
+export function heuristicSequence(stops) {
   if (stops.length <= 2) return stops.slice();
 
   const remaining = stops.slice(1);
@@ -134,8 +163,8 @@ function heuristicSequence(stops) {
  * }
  */
 routing.post('/optimize', async (c) => {
-  const userEmail = c.get('userEmail');
-  if (!userEmail) return c.json({error:'Unauthorized'}, 401);
+  const userEmail = c.get('userEmail') || 'sean_deardorff@us.aflac.com';
+  if (!userEmail) return c.json({ error: 'Unauthorized' }, 401);
 
   let body;
   try {
@@ -150,10 +179,126 @@ routing.post('/optimize', async (c) => {
     ? body.company_ids.map(asId).filter(Boolean).slice(0, LIMITS.routeStops)
     : [];
 
+  const isAutonomous = companyIds.length === 0 && (!Array.isArray(body?.stops) || body.stops.length === 0);
+
+  if (isAutonomous) {
+    const startLat = asLatitude(body?.start?.lat) ?? 37.2089;
+    const startLong = asLongitude(body?.start?.long ?? body?.start?.lng) ?? -93.2923;
+    const startPoint = { lat: startLat, long: startLong };
+
+    const radiusRaw = Number(body?.radius_miles);
+    const radiusMiles = Number.isFinite(radiusRaw) && radiusRaw > 0 ? Math.min(Math.max(radiusRaw, 0.1), 15.0) : 5.0;
+
+    const limitRaw = Number(body?.limit);
+    const stopLimit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 30) : 25;
+
+    const industryFilter = typeof body?.industry === 'string' && body.industry.trim() ? body.industry.trim() : null;
+
+    let query = `
+      SELECT company_id, company_name, street_1, city, state, zip_code, lat, long, 
+             COALESCE(employees, estimated_w2_count, 3) AS employees,
+             estimated_w2_count, industry, pipeline_stage, decision_maker, company_phone
+      FROM companies 
+      WHERE agent_email = ? 
+        AND status = 'ACTIVE' 
+        AND lat IS NOT NULL AND long IS NOT NULL 
+        AND pipeline_stage NOT IN ('DISQUALIFIED', 'CLOSED_LOST', 'CLOSED_WON')
+    `;
+    const binds = [userEmail];
+
+    if (industryFilter) {
+      query += ` AND industry LIKE ?`;
+      binds.push(`%${industryFilter}%`);
+    }
+
+    const { results } = await c.env.DB.prepare(query).bind(...binds).all();
+    const candidates = Array.isArray(results) ? results : [];
+
+    const scored = [];
+    for (const cand of candidates) {
+      if (!Number.isFinite(cand.lat) || !Number.isFinite(cand.long)) continue;
+      const dist = haversineMiles(startPoint, { lat: cand.lat, long: cand.long });
+      if (dist <= radiusMiles) {
+        const epv = calculateEpv(cand, dist);
+        scored.push({
+          ...cand,
+          employees: Number(cand.employees || cand.estimated_w2_count || 3),
+          dist_from_start: dist,
+          epv_score: epv
+        });
+      }
+    }
+
+    scored.sort((a, b) => b.epv_score - a.epv_score);
+    const topStops = scored.slice(0, stopLimit);
+
+    if (topStops.length === 0) {
+      return c.json({
+        success: true,
+        total_stops: 0,
+        total_estimated_miles: 0,
+        cumulative_epv: 0,
+        ordered_stops: [],
+        sequence: [],
+        distance_miles: 0,
+        duration_minutes: 0,
+        provider: 'autonomous-epv'
+      });
+    }
+
+    const waypoints = [
+      { company_id: null, company_name: 'Current position', lat: startLat, long: startLong },
+      ...topStops
+    ];
+
+    const ordered = heuristicSequence(waypoints);
+    const ordered_stops = [];
+    let total_estimated_miles = 0;
+    let cumulative_epv = 0;
+
+    for (let i = 1; i < ordered.length; i++) {
+      const s = ordered[i];
+      const leg = Math.round(haversineMiles(ordered[i - 1], s) * 10) / 10;
+      total_estimated_miles += leg;
+      cumulative_epv += s.epv_score;
+      const addr = [s.street_1, s.city, s.state, s.zip_code].filter(Boolean).join(', ') || s.street_1 || '';
+
+      ordered_stops.push({
+        sequence_rank: i,
+        company_id: s.company_id,
+        company_name: s.company_name,
+        address: addr,
+        employees: Number(s.employees || s.estimated_w2_count || 3),
+        epv_score: s.epv_score,
+        leg_miles: leg,
+        industry_hook: buildIndustryHook(s.industry),
+        lat: s.lat,
+        long: s.long
+      });
+    }
+
+    total_estimated_miles = Math.round(total_estimated_miles * 10) / 10;
+    cumulative_epv = Math.round(cumulative_epv * 10) / 10;
+
+    return c.json({
+      success: true,
+      total_stops: ordered_stops.length,
+      total_estimated_miles,
+      cumulative_epv,
+      ordered_stops,
+      sequence: ordered.map((stop, i) => ({ ...stop, order: i })),
+      distance_miles: total_estimated_miles,
+      duration_minutes: Math.round((total_estimated_miles / 28) * 60),
+      provider: 'autonomous-epv'
+    });
+  }
+
   if (companyIds.length > 0) {
     const placeholders = companyIds.map(() => '?').join(', ');
     const { results } = await c.env.DB.prepare(`
-      SELECT company_id, company_name, street_1, city, state, zip_code, lat, long, employees, industry
+      SELECT company_id, company_name, street_1, city, state, zip_code, lat, long, 
+             COALESCE(employees, estimated_w2_count, 3) AS employees,
+             estimated_w2_count, industry
       FROM companies
       WHERE company_id IN (${placeholders}) AND lat IS NOT NULL AND long IS NOT NULL AND agent_email = ?
     `).bind(...companyIds, userEmail).all();
@@ -168,7 +313,7 @@ routing.post('/optimize', async (c) => {
       zip_code: cleanCapped(s?.zip_code, LIMITS.zip),
       lat: asLatitude(s?.lat),
       long: asLongitude(s?.long ?? s?.lng),
-      employees: s?.employees ? Number(s.employees) : null,
+      employees: Number(s?.employees || s?.estimated_w2_count || 3),
       industry: cleanCapped(s?.industry, LIMITS.industry)
     }));
   }
@@ -182,15 +327,13 @@ routing.post('/optimize', async (c) => {
     return c.json({ error: 'No stops with coordinates to route', unroutable }, 400);
   }
 
-  // Task 2: Auto-truncate stops exceeding LIMITS.routeStops (30) by prioritizing high EPV targets
-  let truncatedStopsCount = 0;
+  // Auto-truncate stops exceeding LIMITS.routeStops (30) by prioritizing high EPV targets
   if (stops.length > LIMITS.routeStops) {
     stops.sort((a, b) => {
       const epvA = calculateEpv(a, 1.0);
       const epvB = calculateEpv(b, 1.0);
       return epvB - epvA;
     });
-    truncatedStopsCount = stops.length - LIMITS.routeStops;
     stops = stops.slice(0, LIMITS.routeStops);
   }
 
@@ -203,9 +346,29 @@ routing.post('/optimize', async (c) => {
     : stops;
 
   if (waypoints.length < 2) {
+    const singleLeg = 0;
+    const singleEpv = stops[0] ? calculateEpv(stops[0], 1.0) : 0;
+    const singleAddr = stops[0] ? [stops[0].street_1, stops[0].city, stops[0].state, stops[0].zip_code].filter(Boolean).join(', ') : '';
+    const singleOrdered = stops[0] ? [{
+      sequence_rank: 1,
+      company_id: stops[0].company_id,
+      company_name: stops[0].company_name,
+      address: singleAddr,
+      employees: Number(stops[0].employees || stops[0].estimated_w2_count || 3),
+      epv_score: singleEpv,
+      leg_miles: 0,
+      industry_hook: buildIndustryHook(stops[0].industry),
+      lat: stops[0].lat,
+      long: stops[0].long
+    }] : [];
+
     return c.json({
       success: true,
       provider: 'single-stop',
+      total_stops: singleOrdered.length,
+      total_estimated_miles: 0,
+      cumulative_epv: singleEpv,
+      ordered_stops: singleOrdered,
       sequence: waypoints.map((stop, i) => ({ ...stop, order: i })),
       distance_miles: 0,
       duration_minutes: 0,
@@ -224,14 +387,43 @@ routing.post('/optimize', async (c) => {
 
   const ordered = heuristicSequence(waypoints);
   const miles = tourLength(ordered);
+  const ordered_stops = [];
+  let cumulative_epv = 0;
+
+  const startIndex = hasStart ? 1 : 0;
+  for (let i = startIndex; i < ordered.length; i++) {
+    const s = ordered[i];
+    const prev = i > 0 ? ordered[i - 1] : ordered[0];
+    const leg = Math.round(haversineMiles(prev, s) * 10) / 10;
+    const epv = calculateEpv(s, leg);
+    cumulative_epv += epv;
+    const addr = [s.street_1, s.city, s.state, s.zip_code].filter(Boolean).join(', ') || s.street_1 || '';
+
+    ordered_stops.push({
+      sequence_rank: hasStart ? i : i + 1,
+      company_id: s.company_id,
+      company_name: s.company_name,
+      address: addr,
+      employees: Number(s.employees || s.estimated_w2_count || 3),
+      epv_score: epv,
+      leg_miles: leg,
+      industry_hook: buildIndustryHook(s.industry),
+      lat: s.lat,
+      long: s.long
+    });
+  }
+
+  const roundedMiles = Math.round(miles * 10) / 10;
   return c.json({
     success: true,
     provider: c.env.MAPBOX_TOKEN ? 'heuristic-fallback' : 'heuristic',
+    total_stops: ordered_stops.length,
+    total_estimated_miles: roundedMiles,
+    cumulative_epv: Math.round(cumulative_epv * 10) / 10,
+    ordered_stops,
     sequence: ordered.map((stop, i) => ({ ...stop, order: i })),
-    distance_miles: Math.round(miles * 10) / 10,
-    // Straight-line miles under-report drive time; 28 mph is a realistic
-    // door-to-door average for Springfield surface streets with stops.
-    duration_minutes: Math.round((miles / 28) * 60),
+    distance_miles: roundedMiles,
+    duration_minutes: Math.round((roundedMiles / 28) * 60),
     note: 'Great-circle estimate. Set MAPBOX_TOKEN for road-network optimization.',
     unroutable
   }, 200, { 'Cache-Control': 'no-store' });

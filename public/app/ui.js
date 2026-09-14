@@ -46,6 +46,69 @@ export function showToast(message, type = 'info') {
   }, 3600);
 }
 
+/**
+ * High-visibility interactive undo toast with countdown timer.
+ */
+export function showUndoToast({ message, onUndo, durationMs = 6000 }) {
+  const container = $('toast-container');
+  if (!container) return null;
+
+  let timerId = null;
+  let countdownSec = Math.max(1, Math.round(durationMs / 1000));
+
+  const undoBtn = el('button', {
+    className: 'btn-undo',
+    attrs: {
+      id: 'undo-btn',
+      type: 'button',
+      style: 'margin-left: 10px; padding: 4px 10px; background: #10b981; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 13px;'
+    },
+    text: `UNDO (${countdownSec}s)`
+  });
+
+  const toast = el('div', {
+    className: 'toast info toast-undo',
+    attrs: { style: 'display: flex; align-items: center; justify-content: space-between; gap: 8px;' },
+    children: [
+      el('span', { text: message }),
+      undoBtn
+    ]
+  });
+
+  const intervalId = setInterval(() => {
+    countdownSec -= 1;
+    if (countdownSec > 0) {
+      undoBtn.textContent = `UNDO (${countdownSec}s)`;
+    } else {
+      clearInterval(intervalId);
+    }
+  }, 1000);
+
+  const dismiss = () => {
+    clearInterval(intervalId);
+    if (timerId) clearTimeout(timerId);
+    toast.classList.add('fade-out');
+    const remove = () => toast.remove();
+    toast.addEventListener('animationend', remove, { once: true });
+    setTimeout(remove, 1000);
+  };
+
+  undoBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dismiss();
+    if (typeof onUndo === 'function') onUndo();
+  });
+
+  container.appendChild(toast);
+
+  timerId = setTimeout(() => {
+    dismiss();
+  }, durationMs);
+
+  return { dismiss, undoBtn };
+}
+
+
 // ---------------------------------------------------------------------
 // BUTTON BUSY STATE
 // ---------------------------------------------------------------------

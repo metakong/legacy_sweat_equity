@@ -6,6 +6,68 @@
 > B2C roofing canvassing app this project used to be. It is retained as history only.
 > None of that code, schema, or UI still exists.
 
+## 2026-09-14 22:45 UTC (2026-09-14 17:45 CDT) — Phase 3: Full-Stack Enterprise Refactor (Sales Velocity, Universal Reversibility, Autonomous Routing & MCP Advancement)
+
+### Summary
+Executed the comprehensive Phase 3 full-stack enterprise refactor to establish operational autonomy for an independent commercial voluntary benefits advisory (Aflac B2B) in Springfield, Missouri:
+1. **Universal Field Reversibility & State Restoration**:
+   - Integrated 6-second interactive undo buffers across mobile PWA and desktop console (`showUndoToast` in `public/app/ui.js`, `public/app/field.js`, `public/app/modules/canvass-view.js`).
+   - Created `POST /api/leads/reactivate` endpoint (clears `disqualified_reason`, sets `status = 'ACTIVE'`, `verification_status = 'FIELD_VERIFIED'`, `confidence_score = 70`, `pipeline_stage = 'PROSPECT'`, increments `sync_version`, appends audit trail note).
+   - Added emerald-green "Reactivate Account" state transition button in company dossier view (`updateDisqualifyButtonState`).
+   - Guardrail 1 verified: Strict preservation of disqualified status integrity; no blanket updates to `companies.status`; `AC Electrical Systems Inc.` (`7025c556-9a5e-499d-836f-88073172facf`) verified untouched.
+2. **Autonomous Dynamic Routing & Spatial EPV Engine**:
+   - Upgraded `POST /api/route/optimize` in `src/routes/routing.js` to run completely autonomous routing when zero explicit IDs are supplied, querying high-EPV candidates within 5–15 mile radius from starting location.
+   - Built Expected Premium Value (EPV) engine with all 6 commercial risk tiers (`Construction & Trades` 2.0x, `Manufacturing` 1.8x, `Transportation & Logistics` 1.7x, `Healthcare & Medical` 1.6x, `Automotive & Dealerships` 1.5x, `Agriculture / Mining` 1.5x, `Hospitality / Wholesale / Utilities` 1.3x, `Retail / Real Estate` 1.1x, other 1.0x).
+   - Guardrail 2 enforced: Headcount null-safety via `COALESCE(employees, estimated_w2_count, 3)` in SQL and `Number(target.employees || target.estimated_w2_count || 3)` in JS to prevent `NaN` during 2-opt tour calculations.
+   - Implemented bounded 2-opt tour heuristic sequence with pinned current position, calculating cumulative mileage, driving time, and industry conversation hooks.
+3. **21-Day 12-Touch Blue-Collar B2B Cadence Engine (`src/lib/cadence.js`)**:
+   - Built 12-step touch matrix across Field Drops, Phone Voicemails, and Email Threads.
+   - Implemented polymorphic `advanceCadence()` calculating `nextStage`, `cadence_next_due_date` using `America/Chicago` business calendar math, and channel definitions.
+4. **Section 125 FICA Tax Offset Engine (`src/lib/tax.js`)**:
+   - Implemented IRC Section 125 cafeteria plan savings calculation (`7.65%` FICA rate on $85/mo supplemental pre-tax benefit at 50% participation).
+   - Added `numberToWords` currency-to-words converter and generated printable cardstock ASCII/HTML mock payroll checks.
+5. **Passive Geofencing & 3-Tap Micro-Logging (`public/app/field.js`)**:
+   - Integrated HTML5 `watchPosition` monitoring 50-meter proximity against active prospect geohashes.
+   - 60-minute suppression guard per target to eliminate alert spam.
+   - Distinctive double-pulse haptics (`navigator.vibrate([100, 50, 100])`) and floating HUD banner with 3-tap action buttons: `[DM Met]`, `[Dropped Teaser]`, and `[Quick Disqualify]` (with 6s undo).
+   - Guardrail 3 enforced: Strict lifecycle management binding geolocation watch to active field sessions, with clean teardown on view navigation away and on `beforeunload`.
+6. **Conflict-Free Delta Sync Engine & D1 Atomic Batching (`src/routes/activity.js`)**:
+   - Refactored `POST /api/sync` to group database mutations into atomic slices of $\le 25$ operations before `env.DB.batch()` (Guardrail 4).
+   - Implemented deterministic Last-Write-Wins (LWW) resolution checking `sync_version` and `client_timestamp_utc` in SQLite upsert statements without dropping field visits.
+7. **Omni-Channel MCP Expansion (`src/routes/mcp.js`)**:
+   - Upgraded `generate_route_manifest` to support autonomous radius/EPV routing.
+   - Upgraded `log_quick_action` to support `REACTIVATE` and `REVERT_DISQUALIFY`.
+   - Added `generate_section125_teaser` returning check mockup and executive pitch script.
+   - Added `advance_cadence_touch` advancing 12-touch cadence and logging activity.
+   - Added `scrape_sos_business_entity` enforcing Guardrail 5 with 4-second `AbortSignal.timeout(4000)` and graceful fallback to cached D1 company intelligence.
+   - Maintained all 4 existing MCP tools (`update_lead_intel`, `get_daily_telemetry`, `get_pipeline_summary`, `triage_suppression_list`).
+8. **Schema Migration (`migrations/0008_phase3_enterprise.sql` & `schema.sql`)**:
+   - Added `cadence_stage`, `cadence_status`, `cadence_next_due_date`, `cadence_last_touch_at`, `est_fica_tax_savings`, `teaser_check_generated_at`, `sync_version`, and `updated_at_utc` to `companies`.
+   - Added `sync_version` and `client_timestamp_utc` to `activity_logs`.
+   - Created partial indexes `idx_companies_cadence_sweep` and `idx_companies_spatial_active`.
+
+### Key Actions & Changes
+- `migrations/0008_phase3_enterprise.sql`: Created DDL migration script.
+- `schema.sql`: Synced base schema definition with Phase 3 columns and indexes.
+- `src/lib/cadence.js`: Implemented 21-day 12-touch B2B cadence engine.
+- `src/lib/tax.js`: Implemented Section 125 FICA savings engine, numberToWords converter, and mock check generator.
+- `src/lib/db.js`: Added `buildCompanyStatement`, `buildActivityLogStatement`, updated `upsertCompany` and `upsertActivityLog` with LWW conflict resolution.
+- `src/routes/leads.js` & `src/routes/companies.js`: Added `POST /api/leads/reactivate` endpoint.
+- `src/routes/routing.js`: Upgraded routing engine with autonomous candidate selection, spatial EPV scoring, and 2-opt tour.
+- `src/routes/activity.js`: Refactored `POST /api/sync` into chunked batches ($\le 25$ operations) with LWW conflict resolution.
+- `src/routes/mcp.js`: Upgraded and added MCP tools.
+- `public/app/ui.js`: Implemented `showUndoToast`.
+- `public/app/field.js`: Implemented 6-second undo buffers, reactivate dossier button, 50m geofence HUD banner, and lifecycle teardown.
+- `public/app/store.js`: Added `sync_version` and `client_timestamp_utc` to offline queue items.
+- `public/app/modules/canvass-view.js`: Integrated 6-second undo toast buffer on canvass card disqualification.
+- `test/cadence.test.js`, `test/routing.test.js`, `test/reactivate.test.js`, `test/mcp.test.js`, `test/schema.test.js`: Added comprehensive unit test suites.
+
+### Verification
+- Executed `npm test`: 380 test cases passed with 0 failures (`100% pass rate`).
+- Confirmed Wrangler 4.112.0 ARM64 compatibility via `scripts/workerd-win-arm64-shim.cjs`.
+
+---
+
 ## 2026-09-14 19:35 UTC (2026-09-14 14:35 CDT) — Phase 2: Architecture Refactor & MCP Expansion
 
 ### Summary

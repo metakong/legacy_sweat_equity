@@ -143,6 +143,10 @@ function buildMigratedDb() {
   for (const statement of statementsOf('migrations/0007_coordinator_present.sql')) {
     raw.exec(statement);
   }
+  // 0008 adds cadence, Section 125, offline conflict tracking, and spatial indexes
+  for (const statement of statementsOf('migrations/0008_phase3_enterprise.sql')) {
+    raw.exec(statement);
+  }
   raw.close();
   return file;
 }

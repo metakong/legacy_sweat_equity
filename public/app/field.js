@@ -6,7 +6,7 @@
  * tolerant.
  */
 
-import { $, el, showToast, setButtonBusy, apiFetch, apiPost } from './ui.js';
+import { $, el, showToast, showUndoToast, setButtonBusy, apiFetch, apiPost } from './ui.js';
 import * as store from './store.js';
 import { enqueue, addToQueue, syncQueue, updatePendingBadge, cacheDossier, getCachedDossier } from './store.js';
 
@@ -669,6 +669,7 @@ export function applyCompany(company) {
   }
 
   syncDossierVisibility();
+  updateDisqualifyButtonState(company);
 }
 
 function clearCompanySelection() {
@@ -1467,10 +1468,9 @@ function initRadarScan() {
 // ---------------------------------------------------------------------
 
 let geofenceWatchId = null;
-let lastGeofenceCheckTime = 0;
 let geofenceEnabled = false;
-const GEOFENCE_THROTTLE_MS = 60000; // 60 seconds battery throttle
-const PROXIMITY_THRESHOLD_METERS = 100;
+const PROXIMITY_THRESHOLD_METERS = 50;
+const targetCooldownMap = new Map(); // company_id -> timestamp
 
 export function haversineMeters(lat1, lon1, lat2, lon2) {
   const toRad = (x) => (x * Math.PI) / 180;
@@ -1485,35 +1485,136 @@ export function haversineMeters(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+export async function logGeofenceQuickTouch(comp, disposition, binaryToggles, currentCoords) {
+  const logId = crypto.randomUUID();
+  const entry = {
+    log_id: logId,
+    company_id: comp.company_id,
+    company: {
+      company_id: comp.company_id,
+      company_name: comp.company_name,
+      street_1: comp.street_1,
+      city: comp.city,
+      state: comp.state,
+      zip_code: comp.zip_code,
+      lat: currentCoords?.lat ?? comp.lat,
+      long: currentCoords?.long ?? comp.long
+    },
+    is_in_person: binaryToggles.is_in_person ?? 1,
+    is_initial: binaryToggles.is_initial ?? 0,
+    is_dm_contact: binaryToggles.is_dm_contact ?? 0,
+    disposition: disposition,
+    coordinator_present: $('coordinatorToggle')?.checked ? 1 : 0,
+    timestamp: new Date().toISOString(),
+    client_timestamp_utc: new Date().toISOString(),
+    sync_version: 1
+  };
+
+  try {
+    await store.addToQueue(entry);
+    showToast(`Logged "${disposition}" for ${comp.company_name}.`, 'success');
+    updateScoreboard();
+  } catch (err) {
+    showToast(`Could not log touch: ${err.message}`, 'error');
+  }
+}
+
 export function evaluateGeofenceProximity(currentLat, currentLong, targetCompanies = state.companies) {
   const banner = $('geofenceAlertBanner');
   if (!banner || !currentLat || !currentLong) return null;
 
-  const todayStr = businessDate();
+  const now = Date.now();
   const eligible = (targetCompanies || []).filter((c) => {
     if (!c || c.lat === null || c.long === null || c.lat === undefined || c.long === undefined) return false;
-    const isWarmOrHot = c.rating === 'Warm' || c.rating === 'Hot';
-    const isDueToday = c.next_action_date === todayStr || c.latest_next_action_date === todayStr;
-    return isWarmOrHot || isDueToday;
+    // 60-minute suppression guard per target
+    const lastPrompt = targetCooldownMap.get(c.company_id) || 0;
+    if (now - lastPrompt < 3600000) return false;
+    return c.status !== 'DISQUALIFIED' && c.status !== 'DO_NOT_CONTACT';
   });
 
   for (const comp of eligible) {
     const dist = haversineMeters(currentLat, currentLong, comp.lat, comp.long);
     if (dist <= PROXIMITY_THRESHOLD_METERS) {
-      banner.replaceChildren();
-      const textSpan = document.createElement('span');
-      textSpan.textContent = `📍 Nearby Prospect: ${comp.company_name} (${Math.round(dist)}m away). Tap to log visit.`;
-      banner.appendChild(textSpan);
-      banner.style.display = 'block';
-
-      banner.onclick = () => {
-        applyCompany(comp);
-        banner.style.display = 'none';
-      };
+      targetCooldownMap.set(comp.company_id, now);
 
       if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-        try { navigator.vibrate([200, 100, 200]); } catch { /* ignore */ }
+        try { navigator.vibrate([100, 50, 100]); } catch { /* ignore */ }
       }
+
+      banner.replaceChildren();
+      const currentCoords = { lat: currentLat, long: currentLong };
+
+      const titleEl = el('span', {
+        text: `📍 Arrived at ${comp.company_name} — `,
+        attrs: { style: 'font-weight: bold; margin-right: 8px;' }
+      });
+
+      const btnDmMet = el('button', {
+        className: 'btn btn-tiny',
+        text: 'DM Met',
+        attrs: { type: 'button', style: 'margin-right: 6px; padding: 4px 8px; background: #10b981; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 12px; cursor: pointer;' }
+      });
+      btnDmMet.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        banner.style.display = 'none';
+        await logGeofenceQuickTouch(comp, 'DM Met', { is_in_person: 1, is_initial: 0, is_dm_contact: 1 }, currentCoords);
+      });
+
+      const btnDroppedTeaser = el('button', {
+        className: 'btn btn-tiny',
+        text: 'Dropped Teaser',
+        attrs: { type: 'button', style: 'margin-right: 6px; padding: 4px 8px; background: #3b82f6; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 12px; cursor: pointer;' }
+      });
+      btnDroppedTeaser.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        banner.style.display = 'none';
+        await logGeofenceQuickTouch(comp, 'Dropped Material', { is_in_person: 1, is_initial: 1, is_dm_contact: 0 }, currentCoords);
+      });
+
+      const btnQuickDisqualify = el('button', {
+        className: 'btn btn-tiny',
+        text: 'Quick Disqualify',
+        attrs: { type: 'button', style: 'padding: 4px 8px; background: var(--danger-color, #ef4444); color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 12px; cursor: pointer;' }
+      });
+      btnQuickDisqualify.addEventListener('click', (e) => {
+        e.stopPropagation();
+        banner.style.display = 'none';
+        const targetId = comp.company_id;
+        const cName = comp.company_name;
+
+        let committed = false;
+        const timeoutId = setTimeout(async () => {
+          committed = true;
+          try {
+            await apiPost('/api/leads/disqualify', { company_id: targetId, reason: 'Field geofence disqualification' });
+          } catch (err) {
+            console.error('Disqualification failed:', err);
+          }
+        }, 6000);
+
+        showUndoToast({
+          message: `Disqualified ${cName}`,
+          durationMs: 6000,
+          onUndo: async () => {
+            clearTimeout(timeoutId);
+            if (committed) {
+              try {
+                await apiPost('/api/leads/reactivate', { company_id: targetId });
+              } catch {
+                /* best effort */
+              }
+            }
+            showToast(`Reactivated ${cName}.`, 'success');
+          }
+        });
+      });
+
+      banner.append(titleEl, btnDmMet, btnDroppedTeaser, btnQuickDisqualify);
+      banner.style.display = 'flex';
+      banner.style.alignItems = 'center';
+      banner.style.flexWrap = 'wrap';
+      banner.style.gap = '4px';
+
       return comp;
     }
   }
@@ -1526,13 +1627,10 @@ export function startGeofenceWatch() {
   if (geofenceWatchId || typeof navigator === 'undefined' || !navigator.geolocation) return;
   geofenceWatchId = navigator.geolocation.watchPosition(
     (pos) => {
-      const now = Date.now();
-      if (now - lastGeofenceCheckTime < GEOFENCE_THROTTLE_MS) return;
-      lastGeofenceCheckTime = now;
       evaluateGeofenceProximity(pos.coords.latitude, pos.coords.longitude);
     },
     (err) => console.info('Geofence watch location warning:', err.message),
-    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
   );
 }
 
@@ -1581,30 +1679,84 @@ function initCoordinatorToggle() {
   });
 }
 
+export function updateDisqualifyButtonState(company) {
+  const btn = $('btnDisqualifyField');
+  if (!btn) return;
+
+  if (company?.status === 'DISQUALIFIED') {
+    btn.textContent = '🔄 Reactivate Account';
+    btn.className = 'btn btn-success btn-reactivate';
+    btn.style.backgroundColor = '#10b981';
+    btn.style.color = 'white';
+  } else {
+    btn.textContent = '🚫 Disqualify';
+    btn.className = 'btn btn-danger';
+    btn.style.backgroundColor = 'var(--danger-color)';
+    btn.style.color = 'white';
+  }
+}
+
 function initDisqualifyField() {
   const btn = $('btnDisqualifyField');
   if (!btn) return;
   
   btn.addEventListener('click', async () => {
     if (!state.selectedCompanyId || state.selectedCompany?.isNew) return;
-    const cName = state.selectedCompany.company_name || 'this account';
+    const comp = state.selectedCompany;
+    const targetId = state.selectedCompanyId;
+    const cName = comp.company_name || 'this account';
     
-    if (!confirm(`Disqualify ${cName}?`)) return;
-    
-    const prevText = btn.textContent;
-    setButtonBusy(btn, true, '...');
-    try {
-      await apiPost('/api/leads/disqualify', {
-        company_id: state.selectedCompanyId,
-        reason: 'Field disqualification'
-      });
-      showToast(`${cName} disqualified.`, 'success');
-      resetForm();
-    } catch (err) {
-      showToast(err.message, 'error');
-    } finally {
-      setButtonBusy(btn, false, prevText);
+    // If currently DISQUALIFIED, clicking triggers Reactivate Account
+    if (comp.status === 'DISQUALIFIED') {
+      const prevText = btn.textContent;
+      setButtonBusy(btn, true, '...');
+      try {
+        await apiPost('/api/leads/reactivate', { company_id: targetId });
+        comp.status = 'ACTIVE';
+        updateDisqualifyButtonState(comp);
+        showToast(`${cName} reactivated.`, 'success');
+        applyCompany(comp);
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        setButtonBusy(btn, false, prevText);
+      }
+      return;
     }
+
+    // 6-Second Interactive Undo Buffer for Disqualification
+    const prevCompany = { ...comp };
+    resetForm();
+
+    let committed = false;
+    const timeoutId = setTimeout(async () => {
+      committed = true;
+      try {
+        await apiPost('/api/leads/disqualify', {
+          company_id: targetId,
+          reason: 'Field disqualification'
+        });
+      } catch (err) {
+        console.error('Background disqualification failed:', err);
+      }
+    }, 6000);
+
+    showUndoToast({
+      message: `Disqualified ${cName}`,
+      durationMs: 6000,
+      onUndo: async () => {
+        clearTimeout(timeoutId);
+        applyCompany(prevCompany);
+        if (committed) {
+          try {
+            await apiPost('/api/leads/reactivate', { company_id: targetId });
+          } catch {
+            /* best-effort */
+          }
+        }
+        showToast(`Reactivated ${cName}.`, 'success');
+      }
+    });
   });
 }
 
@@ -1627,6 +1779,17 @@ export function initFieldView() {
   updateScoreboard();
 
   window.addEventListener('viewactivated', (event) => {
-    if (event.detail.view === 'field') updateScoreboard();
+    if (event.detail?.view === 'field') {
+      updateScoreboard();
+      if (geofenceEnabled) {
+        startGeofenceWatch();
+      }
+    } else {
+      stopGeofenceWatch();
+    }
+  });
+
+  window.addEventListener('beforeunload', () => {
+    stopGeofenceWatch();
   });
 }
