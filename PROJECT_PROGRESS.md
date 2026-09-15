@@ -4,6 +4,25 @@
 
 > **Note**: Everything below the 2026-08-29 entry describes **Legacy Sweat Equity**, the
 > B2C roofing canvassing app this project used to be. It is retained as history only.
+## 2026-09-15 18:30 CDT — Zero-Defect Data Purge & MCP Gate Hardening (100% Headcount Confidence Floor)
+
+### Summary
+Executed absolute precision hardening (Precision over Recall) to eliminate windshield time on out-of-territory or unverified prospects:
+1. **Out-of-Territory D1 Purge**:
+   - Executed `DELETE FROM companies WHERE zip_code NOT IN ('65802', '65803', '65804', '65806', '65807', '65809', '65810');` against remote production D1 database (`legacy-db` `847928be-c56f-4de4-bff4-083e08db9140`).
+   - Purged exactly 103 out-of-territory rows (Branson, Nixa, Joplin, Ozark, etc.), strictly confining the active PWA dataset to the Springfield, MO city limits.
+2. **MCP Gate 2 Hardening (`src/routes/mcp.js`)**:
+   - Hardened Gate 2 in `batch_ingest_prospects` to require 100% headcount confidence floor:
+     `if (estimated_w2_count < 5 || headcount_confidence_score < 1.0)`
+   - Any prospect lacking Tier 1 verified 100% confidence or falling below 5 W-2 employees is immediately flagged as `rejected_sub_threshold` and dropped at the edge.
+3. **Testing & Verification**:
+   - Updated `test/phase2_defenses.test.js` to reflect the `< 1.0` confidence rejection threshold for Gate 2 and updated valid test fixtures to `headcount_confidence_score: 1.0`.
+   - Full test suite verified: 394 passed, 0 failed (`npm test`).
+4. **Git & Edge Deployment**:
+   - Committed changes: `feat(edge): enforce 100% headcount confidence floor and purge external zip codes`.
+   - Pushed to `origin/main`.
+   - Deployed via the ARM64 shim: `npm run deploy` (Current Version ID: `54db671f-847e-4662-b076-2a5439e61c46`).
+
 ## 2026-09-15 16:00 CDT — Phase 2: Edge Blueprint (Hard Scoring Gates, Native DNC, & Batch MCP Ingestion)
 
 ### Summary
