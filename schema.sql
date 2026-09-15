@@ -269,6 +269,18 @@ CREATE TABLE IF NOT EXISTS d365_daily_aggregates (
 );
 
 -- ---------------------------------------------------------------------
+-- 5d. RAW_TARGETS — staging table for overnight automated prospecting
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS raw_targets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_name TEXT,
+    address TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_raw_targets_status ON raw_targets(status);
+
+-- ---------------------------------------------------------------------
 -- 6. NON-DESTRUCTIVE MIGRATIONS — add new columns to existing production DB.
 --    All listed ALTERs below have been EXECUTED against production D1
 --    on 2026-08-30. They are kept commented as documentation.

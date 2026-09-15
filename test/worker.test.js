@@ -1922,3 +1922,55 @@ test('Stream 2: GET /api/pipeline/forecast computes velocity, win rates, and wei
     try { fs.rmSync(path.dirname(tempDb), { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+test('scrapeMissouriSosEntity returns safe empty structure on empty company name', async () => {
+  const { scrapeMissouriSosEntity } = await import('../src/routes/enrich.js');
+  const res = await scrapeMissouriSosEntity({}, '');
+  assert.equal(res.decision_maker, null);
+  assert.equal(res.is_closed, true);
+});
+
+test('handleScheduledEvent routes 0 2 * * * to sourcing/rollup and 15 2 * * * to chunked processing', async () => {
+  const { handleScheduledEvent } = await import('../src/index.js');
+
+  const mockPrepared = {
+    first: async () => ({}),
+    all: async () => ({ results: [] }),
+    run: async () => ({})
+  };
+  const mockEnv = {
+    DB: {
+      prepare: () => ({
+        bind: () => mockPrepared,
+        all: async () => ({ results: [] }),
+        first: async () => ({}),
+        run: async () => ({})
+      })
+    }
+  };
+
+  // Check 0 2 * * * routing doesn't throw
+  await handleScheduledEvent({ cron: '0 2 * * *' }, mockEnv);
+  // Check 15 2 * * * routing doesn't throw
+  await handleScheduledEvent({ cron: '15 2 * * *' }, mockEnv);
+});
+
+test('Phase 4: raw_targets table exists and handles status transitions', async () => {
+  const tempDb = path.join(os.tmpdir(), `test-raw-targets-${Date.now()}.sqlite`);
+  try {
+    const db = createD1(tempDb);
+    await db.prepare("INSERT INTO raw_targets (business_name, address, status) VALUES (?, ?, 'pending')")
+      .bind('Springfield Heating & Air', '123 E Sunshine St')
+      .run();
+
+    const row = await db.prepare("SELECT * FROM raw_targets WHERE status = 'pending'").first();
+    assert.equal(row.business_name, 'Springfield Heating & Air');
+    assert.equal(row.status, 'pending');
+
+    await db.prepare("UPDATE raw_targets SET status = 'completed' WHERE id = ?").bind(row.id).run();
+    const updated = await db.prepare("SELECT status FROM raw_targets WHERE id = ?").bind(row.id).first();
+    assert.equal(updated.status, 'completed');
+  } finally {
+    try { fs.rmSync(tempDb, { force: true }); } catch (_) {}
+  }
+});

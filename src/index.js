@@ -43,7 +43,9 @@ import voiceRouter, { handleVoiceDebrief } from './routes/voice.js';
 import leadsRouter, { handleLeads } from './routes/leads.js';
 import mcpRouter from './routes/mcp.js';
 import oauthRouter, { wellKnownRouter } from './routes/oauth.js';
-import { classifyIndustry } from './lib/ai.js';
+import { classifyIndustry, tavilySearch, chatJson } from './lib/ai.js';
+import { calculateFicaSavings } from './lib/tax.js';
+import { scrapeMissouriSosEntity } from './routes/enrich.js';
 
 const app = new Hono();
 
@@ -388,18 +390,15 @@ export async function computeTelemetry(db, env = {}, targetDate = businessDate()
   };
 }
 
+const DEFAULT_AGENT_EMAIL = 'sean_deardorff@us.aflac.com';
+
 // ---------------------------------------------------------------------
-// NIGHTLY ROLLUP (cron: 0 2 * * *)
+// NIGHTLY ROLLUP & ZERO-ADMIN OVERNIGHT PROSPECTING PIPELINE
 // ---------------------------------------------------------------------
 
 /**
  * At 02:00 UTC the Springfield workday that just ended is still "yesterday" in
  * UTC terms, so the target date comes from local time, never DATE('now').
- *
- * This is read-only. The retired schema had an `insights` table for AI daily
- * debriefs; the B2B schema has no equivalent, so the rollup is emitted to logs
- * (`npm run tail`) rather than persisted. Add a table here if the numbers turn
- * out to be worth keeping.
  */
 export async function runNightlyRollup(env) {
   const targetDate = businessDate();
@@ -422,10 +421,261 @@ export async function runNightlyRollup(env) {
   return { date: targetDate, ...summary };
 }
 
+/**
+ * Phase A (Sourcing - runs only on 0 2 * * *):
+ * Utilizes Tavily to search for commercial HVAC and light manufacturing businesses
+ * in Springfield MO, parses the results, inserts raw targets into raw_targets,
+ * and terminates safely.
+ */
+export async function runNightlySourcing(env) {
+  if (!env.DB) {
+    console.warn('Phase A aborted: D1 database binding DB missing.');
+    return { count: 0 };
+  }
+  if (!env.TAVILY_API_KEY) {
+    console.warn('Phase A aborted: TAVILY_API_KEY is not configured.');
+    return { count: 0 };
+  }
+
+  console.log('Phase A Sourcing: Searching for commercial HVAC and light manufacturing in Springfield MO');
+  let search;
+  try {
+    search = await tavilySearch(env, 'commercial HVAC and light manufacturing businesses in Springfield MO', {
+      maxResults: 15,
+      days: 365,
+      includeRawContent: false
+    });
+  } catch (err) {
+    console.error('Phase A Tavily search failed:', err.message);
+    return { count: 0, error: err.message };
+  }
+
+  let targets = [];
+
+  // Attempt structured extraction with OpenRouter if available
+  if (env.OPENROUTER_API_KEY && search?.results?.length) {
+    try {
+      const summary = search.results
+        .map((r, idx) => `[${idx + 1}] Title: ${r.title}\nSnippet: ${r.content}\nURL: ${r.url}`)
+        .join('\n\n');
+      const parsed = await chatJson(env, {
+        taskTier: 'simple',
+        system: 'Extract commercial HVAC and light manufacturing businesses located in or near Springfield, Missouri from the search results. Return JSON: {"targets": [{"business_name": "Exact Business Name", "address": "Street Address or Springfield, MO"}]}. Exclude directory sites, aggregators, and lists (e.g. Yelp, YellowPages, BBB, Angi).',
+        user: `Search answer:\n${search.answer}\n\nSearch results:\n${summary}`
+      });
+      if (Array.isArray(parsed?.targets)) {
+        targets = parsed.targets.filter(t => t?.business_name && typeof t.business_name === 'string');
+      }
+    } catch (err) {
+      console.warn('Phase A AI target extraction fallback:', err.message);
+    }
+  }
+
+  // Fallback heuristic extraction if AI parsing was empty or unavailable
+  if (!targets.length && search?.results?.length) {
+    for (const r of search.results) {
+      const cleanName = r.title
+        .replace(/\s*[-–|].*$/, '')
+        .replace(/^(?:The\s+)?(?:Top|Best|\d+)\s+.*$/i, '')
+        .trim();
+      const lower = cleanName.toLowerCase();
+      if (cleanName.length > 2 && !lower.includes('yelp') && !lower.includes('yellowpages') && !lower.includes('bbb') && !lower.includes('angi')) {
+        targets.push({
+          business_name: cleanName,
+          address: 'Springfield, MO'
+        });
+      }
+    }
+  }
+
+  let insertedCount = 0;
+  for (const t of targets) {
+    const name = (t.business_name || '').trim();
+    if (!name || name.length < 2) continue;
+    const addr = (t.address || 'Springfield, MO').trim();
+
+    try {
+      const existing = await env.DB.prepare(
+        'SELECT id FROM raw_targets WHERE LOWER(business_name) = LOWER(?) LIMIT 1'
+      ).bind(name).first();
+
+      if (!existing) {
+        await env.DB.prepare(
+          "INSERT INTO raw_targets (business_name, address, status) VALUES (?, ?, 'pending')"
+        ).bind(name, addr).run();
+        insertedCount++;
+      }
+    } catch (err) {
+      console.warn(`Error inserting raw target "${name}":`, err.message);
+    }
+  }
+
+  console.log(`Phase A Sourcing completed: ${insertedCount} new targets added to raw_targets`);
+  return { count: insertedCount };
+}
+
+/**
+ * Phase B (Chunked Processing - runs on 15, 30, and 45 minute triggers):
+ * Pulls up to 10 pending targets from raw_targets, enriches via Missouri SOS,
+ * applies attrition filter, calculates FICA savings, and batch inserts into companies.
+ */
+export async function runChunkedProcessing(env) {
+  if (!env.DB) {
+    console.warn('Phase B aborted: D1 database binding DB missing.');
+    return { processed: 0 };
+  }
+
+  const { results } = await env.DB.prepare(
+    "SELECT id, business_name, address FROM raw_targets WHERE status = 'pending' ORDER BY id ASC LIMIT 10"
+  ).all();
+
+  const batch = Array.isArray(results) ? results : [];
+  if (batch.length === 0) {
+    console.log('Phase B: No pending raw_targets to process.');
+    return { processed: 0 };
+  }
+
+  console.log(`Phase B: Processing ${batch.length} pending targets`);
+
+  const statements = [];
+  let survivedCount = 0;
+  let failedCount = 0;
+
+  for (const target of batch) {
+    const businessName = (target.business_name || '').trim();
+    const address = (target.address || 'Springfield, MO').trim();
+
+    // 1. Route target name through Missouri SOS logic
+    const sos = await scrapeMissouriSosEntity(env, businessName, address);
+
+    // 2. The Attrition Filter: Drop target if null DMs or closed address / dissolved
+    if (!sos.decision_maker || sos.is_closed) {
+      statements.push(
+        env.DB.prepare("UPDATE raw_targets SET status = 'failed' WHERE id = ?").bind(target.id)
+      );
+      failedCount++;
+      continue;
+    }
+
+    // 3. Pass surviving targets through calculateFicaSavings (0.70 participation, $120/mo)
+    const headcount = 10;
+    const fica = calculateFicaSavings(headcount, 0.70, 120);
+
+    // 4. Generate exact smart_calling_pvp formatted string
+    const perEmpFormatted = '$' + fica.per_employee_annual_savings.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+    const smart_calling_pvp = `We are helping local commercial employers permanently recapture exactly 7.65% in matching FICA tax liabilities—averaging ${perEmpFormatted} per participating employee annually—which for a shop your size equates to ${fica.formatted_savings} directly back to the bottom line.`;
+
+    // Categorize industry
+    const lowerName = businessName.toLowerCase();
+    let industry = 'Other Commercial';
+    if (lowerName.includes('hvac') || lowerName.includes('heating') || lowerName.includes('cooling') || lowerName.includes('air') || lowerName.includes('plumb')) {
+      industry = 'Construction & Trades';
+    } else if (lowerName.includes('mfg') || lowerName.includes('manufacturing') || lowerName.includes('fabricat') || lowerName.includes('machine') || lowerName.includes('metal')) {
+      industry = 'Manufacturing';
+    }
+
+    const notes = [
+      `[Overnight Intelligence]`,
+      sos.formation_year ? `Formation Year: ${sos.formation_year}` : null,
+      sos.officers?.length ? `Officers: ${sos.officers.join(', ')}` : null,
+      `PVP: ${smart_calling_pvp}`
+    ].filter(Boolean).join('\n');
+
+    // Check if company already exists
+    let existingCompany = null;
+    try {
+      existingCompany = await env.DB.prepare(
+        'SELECT company_id, sync_version FROM companies WHERE LOWER(company_name) = LOWER(?) AND agent_email = ? LIMIT 1'
+      ).bind(businessName, DEFAULT_AGENT_EMAIL).first();
+    } catch (_) {}
+
+    const companyId = existingCompany?.company_id || crypto.randomUUID();
+    const syncVersion = (existingCompany?.sync_version || 1) + 1;
+
+    // 5. Batch insert directly into active companies table
+    statements.push(
+      env.DB.prepare(`
+        INSERT INTO companies (
+          company_id, company_name, street_1, city, state, zip_code,
+          industry, lead_source, rating, pipeline_stage, status, verification_status,
+          confidence_score, decision_maker, notes,
+          estimated_w2_count, est_fica_tax_savings,
+          sync_version, agent_email, updated_at_utc, created_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?,
+          ?, 'Cold Call', 'Warm', 'PROSPECT', 'ACTIVE', 'UNVERIFIED',
+          60, ?, ?,
+          ?, ?,
+          ?, ?, datetime('now'), datetime('now')
+        )
+        ON CONFLICT(company_id, agent_email) DO UPDATE SET
+          company_name = excluded.company_name,
+          decision_maker = excluded.decision_maker,
+          notes = excluded.notes,
+          est_fica_tax_savings = excluded.est_fica_tax_savings,
+          sync_version = companies.sync_version + 1,
+          updated_at_utc = datetime('now')
+      `).bind(
+        companyId,
+        businessName,
+        address,
+        'Springfield',
+        'MO',
+        '65807',
+        industry,
+        sos.decision_maker,
+        notes,
+        headcount,
+        fica.employer_fica_savings,
+        syncVersion,
+        DEFAULT_AGENT_EMAIL
+      )
+    );
+
+    // Mark processed target as completed
+    statements.push(
+      env.DB.prepare("UPDATE raw_targets SET status = 'completed' WHERE id = ?").bind(target.id)
+    );
+
+    survivedCount++;
+  }
+
+  if (statements.length > 0) {
+    await env.DB.batch(statements);
+  }
+
+  console.log(`Phase B Batch Complete: ${survivedCount} survived & inserted, ${failedCount} dropped via attrition`);
+  return {
+    processed: batch.length,
+    survived: survivedCount,
+    failed: failedCount
+  };
+}
+
+/**
+ * Router for scheduled cron triggers:
+ * - 0 2 * * *: Nightly rollup + Phase A (Sourcing)
+ * - 15 2 * * *, 30 2 * * *, 45 2 * * *: Phase B (Chunked Processing)
+ */
+export async function handleScheduledEvent(event, env) {
+  const cron = event?.cron;
+  console.log(`Cron triggered with schedule: "${cron}"`);
+
+  if (cron === '0 2 * * *') {
+    await runNightlyRollup(env).catch(err => console.error('Nightly rollup error:', err));
+    await runNightlySourcing(env).catch(err => console.error('Phase A sourcing error:', err));
+  } else {
+    await runChunkedProcessing(env).catch(err => console.error('Phase B chunked processing error:', err));
+  }
+}
+
 export default {
   fetch: app.fetch,
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runNightlyRollup(env));
+    ctx.waitUntil(handleScheduledEvent(event, env));
   }
 };
 

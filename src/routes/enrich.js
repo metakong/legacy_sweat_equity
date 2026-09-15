@@ -233,4 +233,79 @@ function extractHeadcount(bullets) {
   return Number.isInteger(n) && n > 0 && n < 5_000_000 ? n : null;
 }
 
+/**
+ * Scrape / query Missouri SOS records via Tavily to extract Decision Maker (officer/principal)
+ * and entity formation year, detecting closed/dissolved status.
+ */
+export async function scrapeMissouriSosEntity(env, companyName, address = 'Springfield, MO', timeoutMs = 4000) {
+  if (!companyName || !companyName.trim()) {
+    return { decision_maker: null, officers: [], formation_year: null, is_closed: true };
+  }
+
+  const query = `"${companyName.trim()}" ${address} business entity registration officers principals formation incorporated`;
+
+  try {
+    const searchPromise = tavilySearch(env, query.slice(0, 400), {
+      includeDomains: ['bsd.sos.mo.gov', 'opencorporates.com', 'bizapedia.com'],
+      days: 365,
+      maxResults: 5,
+      includeRawContent: false
+    });
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('SOS search timeout')), timeoutMs)
+    );
+    const search = await Promise.race([searchPromise, timeoutPromise]);
+
+    if (!search?.results?.length) {
+      return { decision_maker: null, officers: [], formation_year: null, is_closed: false };
+    }
+
+    const combined = search.results.map((r) => `${r.title || ''}\n${r.content || ''}`).join('\n');
+
+    // Check closed status / address closed
+    const isClosed = /(?:permanently\s+closed|dissolved|forfeited|inactive|revoked|closed\s+down|out\s+of\s+business)/i.test(combined);
+
+    // Extract formation year / date
+    let formationYear = null;
+    const datePatterns = [
+      /(?:formed|incorporated|organized|registered|filed|creation\s*date|formation\s*date)[:\s]+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+      /(?:formed|incorporated|organized|registered|filed|creation\s*date|formation\s*date)[:\s]+(\w+\s+\d{1,2},?\s*\d{4})/i,
+      /(?:formation|incorporation|organization)\s+(?:date|year)?[:\s]*(\d{4})/i,
+      /\b(?:since|est\.?|established)\s+(\d{4})\b/i
+    ];
+    for (const pat of datePatterns) {
+      const match = combined.match(pat);
+      if (match) {
+        const yearMatch = match[1].match(/\b(19\d\d|20\d\d)\b/);
+        formationYear = yearMatch ? yearMatch[1] : match[1].trim();
+        break;
+      }
+    }
+
+    // Extract officers / principals
+    const officers = new Set();
+    const officerPattern = /(?:registered\s*agent|agent|officer|director|principal|president|owner|manager|member|organizer|incorporator)[:\s]+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,3})/gi;
+    let m;
+    while ((m = officerPattern.exec(combined)) !== null) {
+      const name = m[1].trim();
+      if (name.length > 3 && name.length < 60 && !/(?:Corporation|Company|LLC|Inc|Services|Missouri|Department)/i.test(name)) {
+        officers.add(name);
+      }
+    }
+
+    const officerList = [...officers];
+    const decisionMaker = officerList.length > 0 ? officerList[0] : null;
+
+    return {
+      decision_maker: decisionMaker,
+      officers: officerList,
+      formation_year: formationYear,
+      is_closed: isClosed
+    };
+  } catch (err) {
+    console.warn(`SOS lookup for ${companyName} failed:`, err.message);
+    return { decision_maker: null, officers: [], formation_year: null, is_closed: false };
+  }
+}
+
 export default enrich;
