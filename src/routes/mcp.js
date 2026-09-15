@@ -13,6 +13,7 @@ import { snoozeCompany } from '../lib/db.js';
 import { getIndustryMultiplier, calculateEpv, buildIndustryHook, heuristicSequence, haversineMiles } from './routing.js';
 import { advanceCadence } from '../lib/cadence.js';
 import { generateTeaserCheckPayload } from '../lib/tax.js';
+import { tavilySearch } from '../lib/ai.js';
 
 const mcpRouter = new Hono();
 
@@ -422,9 +423,12 @@ export function createMcpServer(env) {
     'Calculate Section 125 pre-tax FICA payroll savings and generate an executive mock check artifact.',
     {
       company_name: z.string().describe('Target company name'),
-      w2_count: z.number().int().positive().optional().describe('Optional override for W-2 employee headcount')
+      w2_count: z.number().int().positive().optional().describe('Optional override for W-2 employee headcount'),
+      average_hourly_wage: z.number().positive().optional().describe('Average hourly wage for FICA offset context'),
+      projected_monthly_pretax_deduction: z.number().positive().optional().describe('Monthly pre-tax voluntary premium per employee (default $85)'),
+      participation_rate: z.number().min(0.01).max(1.0).optional().describe('Employee opt-in rate 0.01–1.0 (default 0.50)')
     },
-    async ({ company_name, w2_count }) => {
+    async ({ company_name, w2_count, average_hourly_wage, projected_monthly_pretax_deduction, participation_rate }) => {
       const pattern = `%${company_name.trim()}%`;
       const company = await env.DB.prepare(
         'SELECT company_id, company_name, employees, estimated_w2_count, decision_maker FROM companies WHERE company_name LIKE ? AND agent_email = ? LIMIT 1'
@@ -435,10 +439,15 @@ export function createMcpServer(env) {
       }
 
       const headcount = w2_count || company.employees || company.estimated_w2_count || 5;
+      const overrides = {};
+      if (typeof participation_rate === 'number') overrides.participation_rate = participation_rate;
+      if (typeof projected_monthly_pretax_deduction === 'number') overrides.projected_monthly_pretax_deduction = projected_monthly_pretax_deduction;
+      if (typeof average_hourly_wage === 'number') overrides.average_hourly_wage = average_hourly_wage;
+
       const teaser = generateTeaserCheckPayload({
         ...company,
         estimated_w2_count: headcount
-      });
+      }, overrides);
 
       await env.DB.prepare(`
         UPDATE companies
@@ -471,8 +480,10 @@ export function createMcpServer(env) {
 \`\`\`
 
 ## Executive Pitch Script:
-"Hi ${company.decision_maker || '[Decision Maker]'}, when Springfield employers implement our pre-tax voluntary benefit structure under Section 125, the business recovers roughly 7.65% in payroll taxes per participating employee. For your team of ${headcount}, that translates to approximately $${teaser.employer_fica_savings.toLocaleString()} annually in hard-dollar payroll tax deductions directly back to your bottom line, zero net cost to the company."`;
+"Hi ${company.decision_maker || '[Decision Maker]'}, when Springfield employers implement our pre-tax voluntary benefit structure under Section 125, the business recovers roughly 7.65% in payroll taxes per participating employee. For your team of ${headcount}, that translates to approximately $${teaser.employer_fica_savings.toLocaleString()} annually in hard-dollar payroll tax deductions directly back to your bottom line, zero net cost to the company."
 
+## Smart Calling PVP:
+"${teaser.smart_calling_pvp}"`;
       return { content: [{ type: 'text', text }] };
     }
   );
@@ -544,11 +555,18 @@ export function createMcpServer(env) {
 
   server.tool(
     'scrape_sos_business_entity',
-    'Lookup business entity records on Missouri Secretary of State (SOS) with 4-second timeout & D1 fallback.',
+    'Lookup Missouri business entity records via Tavily web search with 4-second timeout & D1 fallback. Returns officers/principals and formation date.',
     {
-      company_name: z.string().describe('Business entity name to query')
+      company_name: z.string().describe('Business entity name to query'),
+      city: z.string().optional().describe('City (default: Springfield)'),
+      state: z.string().optional().describe('State abbreviation (default: MO)'),
+      status_filter: z.string().optional().describe('Entity status filter (default: Active)')
     },
-    async ({ company_name }) => {
+    async ({ company_name, city, state, status_filter }) => {
+      const targetCity = (city || 'Springfield').trim();
+      const targetState = (state || 'MO').trim();
+
+      // D1 fallback lookup — always runs so we have a safety net
       const pattern = `%${company_name.trim()}%`;
       const fallbackCompany = await env.DB.prepare(`
         SELECT company_id, company_name, decision_maker, status, industry,
@@ -558,36 +576,80 @@ export function createMcpServer(env) {
         LIMIT 1
       `).bind(pattern, DEFAULT_AGENT_EMAIL).first();
 
-      let sosData = null;
+      let sosResult = null;
       try {
-        // Enforce Guardrail 5: strict 4-second timeout
-        const sosUrl = `https://bsd.sos.mo.gov/BusinessEntity/BESearch.aspx?SearchType=0&SearchValue=${encodeURIComponent(company_name.trim())}`;
-        const resp = await fetch(sosUrl, {
-          signal: AbortSignal.timeout(4000),
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-        });
+        const query = `"${company_name.trim()}" ${targetCity} ${targetState} business entity registration officers principals formation incorporated`;
 
-        if (resp.ok) {
-          sosData = {
+        // Race Tavily search against a strict 4-second deadline (Guardrail 5)
+        const searchPromise = tavilySearch(env, query.slice(0, 400), {
+          includeDomains: ['bsd.sos.mo.gov', 'opencorporates.com', 'bizapedia.com'],
+          days: 365,
+          maxResults: 5,
+          includeRawContent: false
+        });
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('SOS search timeout (4s)')), 4000)
+        );
+        const search = await Promise.race([searchPromise, timeoutPromise]);
+
+        if (search?.results?.length > 0) {
+          const combined = search.results.map(r => `${r.title || ''}\n${r.content || ''}`).join('\n');
+
+          // Extract formation/incorporation date from search snippets
+          let formationDate = null;
+          const datePatterns = [
+            /(?:formed|incorporated|organized|registered|filed|creation\s*date|formation\s*date)[:\s]+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+            /(?:formed|incorporated|organized|registered|filed|creation\s*date|formation\s*date)[:\s]+(\w+\s+\d{1,2},?\s*\d{4})/i,
+            /(?:formation|incorporation|organization)\s+(?:date)?[:\s]*(\d{4})/i
+          ];
+          for (const pat of datePatterns) {
+            const m = combined.match(pat);
+            if (m) { formationDate = m[1].trim(); break; }
+          }
+
+          // Extract officers/principals from search snippets
+          const officers = new Set();
+          const officerPattern = /(?:registered\s*agent|agent|officer|director|principal|president|owner|manager|member|organizer|incorporator)[:\s]+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,3})/gi;
+          let m;
+          while ((m = officerPattern.exec(combined)) !== null) {
+            const name = m[1].trim();
+            if (name.length > 3 && name.length < 60) officers.add(name);
+          }
+
+          // Supplement from D1 decision_maker if search yielded no officers
+          const officerList = officers.size > 0
+            ? [...officers]
+            : (fallbackCompany?.decision_maker ? [fallbackCompany.decision_maker] : []);
+
+          sosResult = {
             entity_name: company_name.trim(),
-            status: 'Active',
-            source: 'Missouri Secretary of State (Live)',
+            city: targetCity,
+            state: targetState,
+            status: status_filter || 'Active',
+            officers: officerList,
+            formation_date: formationDate,
+            sources: search.results.map(r => ({ title: r.title, url: r.url })),
+            source_method: 'Tavily Search',
             retrieved_at: new Date().toISOString()
           };
         }
       } catch (err) {
-        // Timeout or network failure - fall back gracefully per Guardrail 5
-        console.warn('Live SOS lookup failed or timed out:', err.message);
+        // Timeout, network failure, or TAVILY_API_KEY missing — fall back gracefully
+        console.warn('SOS Tavily search failed or timed out:', err.message);
       }
 
-      if (!sosData) {
+      if (!sosResult) {
         return {
           content: [{
             type: 'text',
             text: JSON.stringify({
               cached: true,
-              note: 'Live SOS lookup timed out or unavailable. Returning cached D1 intelligence.',
-              company: fallbackCompany || { company_name, message: 'No cached D1 record found.' }
+              note: 'Tavily SOS search timed out or provider unconfigured. Returning cached D1 intelligence.',
+              company: fallbackCompany ? {
+                ...fallbackCompany,
+                officers: fallbackCompany.decision_maker ? [fallbackCompany.decision_maker] : [],
+                formation_date: null
+              } : { company_name: company_name.trim(), message: 'No cached D1 record found.' }
             }, null, 2)
           }]
         };
@@ -598,7 +660,7 @@ export function createMcpServer(env) {
           type: 'text',
           text: JSON.stringify({
             cached: false,
-            sos_data: sosData,
+            sos_data: sosResult,
             company: fallbackCompany
           }, null, 2)
         }]

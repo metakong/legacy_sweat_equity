@@ -59,22 +59,27 @@ export function numberToWords(amount) {
  * @param {number} [avgMonthlyPremium=85] - Average monthly pre-tax voluntary premium per enrolled worker ($85/mo)
  * @returns {object} Calculated financial savings metrics
  */
-export function calculateFicaSavings(w2Count, participationRate = 0.50, avgMonthlyPremium = 85) {
+export function calculateFicaSavings(w2Count, participationRate = 0.50, avgMonthlyPremium = 85, averageHourlyWage = null) {
   const count = Number.isFinite(Number(w2Count)) && Number(w2Count) > 0 ? Number(w2Count) : 10;
   const partRate = Number.isFinite(Number(participationRate)) && Number(participationRate) > 0 ? Number(participationRate) : 0.50;
   const premium = Number.isFinite(Number(avgMonthlyPremium)) && Number(avgMonthlyPremium) > 0 ? Number(avgMonthlyPremium) : 85;
+  const wage = Number.isFinite(Number(averageHourlyWage)) && Number(averageHourlyWage) > 0 ? Number(averageHourlyWage) : null;
 
   const enrolledWorkers = Math.round(count * partRate);
   const annualContribution = count * partRate * (premium * 12);
   const employerSavings = annualContribution * FICA_RATE;
+  const perEmployeeAnnualSavings = Math.round((premium * 12) * FICA_RATE * 100) / 100;
 
   return {
     w2_count: count,
     participation_rate: partRate,
     avg_monthly_premium: premium,
+    average_hourly_wage: wage,
+    annual_wage_estimate: wage ? Math.round(wage * 2080 * 100) / 100 : null,
     enrolled_workers: enrolledWorkers,
     annual_employee_contribution: Math.round(annualContribution * 100) / 100,
     employer_fica_savings: Math.round(employerSavings * 100) / 100,
+    per_employee_annual_savings: perEmployeeAnnualSavings,
     fica_rate: FICA_RATE,
     formatted_savings: '$' + (Math.round(employerSavings * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   };
@@ -86,9 +91,9 @@ export function calculateFicaSavings(w2Count, participationRate = 0.50, avgMonth
  * @param {object} company - Company database record
  * @returns {object} Teaser check payload and HTML block
  */
-export function generateTeaserCheckPayload(company) {
+export function generateTeaserCheckPayload(company, overrides = {}) {
   const w2 = company?.estimated_w2_count || company?.employees || 15;
-  const metrics = calculateFicaSavings(w2);
+  const metrics = calculateFicaSavings(w2, overrides.participation_rate, overrides.projected_monthly_pretax_deduction, overrides.average_hourly_wage);
   const companyName = company?.company_name || 'Business Owner';
   const payee = company?.decision_maker ? `${company.decision_maker}, ${companyName}` : companyName;
   const checkDate = businessDate();
@@ -131,6 +136,9 @@ export function generateTeaserCheckPayload(company) {
 </div>
 `.trim();
 
+  const perEmpFormatted = '$' + metrics.per_employee_annual_savings.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const smart_calling_pvp = `We are helping local commercial employers permanently recapture exactly 7.65% in matching FICA tax liabilities—averaging ${perEmpFormatted} per participating employee annually—which for a shop your size equates to ${metrics.formatted_savings} directly back to the bottom line.`;
+
   return {
     company_id: company?.company_id || null,
     company_name: companyName,
@@ -140,8 +148,10 @@ export function generateTeaserCheckPayload(company) {
     w2_count: metrics.w2_count,
     employer_fica_savings: metrics.employer_fica_savings,
     formatted_savings: metrics.formatted_savings,
+    per_employee_annual_savings: metrics.per_employee_annual_savings,
     amount_in_words: words,
     memo: `Section 125 Pre-Tax Payroll FICA Recovery (${metrics.w2_count} W-2 Staff)`,
+    smart_calling_pvp,
     check_html: checkHtml
   };
 }
