@@ -1760,6 +1760,57 @@ function initDisqualifyField() {
   });
 }
 
+function initAccessBarrierField() {
+  const btn = $('btnAccessBarrierField');
+  if (!btn) return;
+
+  btn.addEventListener('click', async () => {
+    if (!state.selectedCompanyId || state.selectedCompany?.isNew) return;
+    const comp = state.selectedCompany;
+    const targetId = state.selectedCompanyId;
+    const cName = comp.company_name || 'this account';
+
+    const prevCompany = { ...comp };
+    resetForm();
+
+    let committed = false;
+    const timeoutId = setTimeout(async () => {
+      committed = true;
+      try {
+        await apiPost('/api/activity', {
+          action_type: 'SET_ACCESS_BARRIER',
+          company_id: targetId,
+          access_type: 'LOCKED_DOOR_PHONE_ONLY',
+          notes: 'Curbside barrier logged from mobile HUD: Locked door / Gated'
+        });
+      } catch (err) {
+        try {
+          await enqueue({
+            log_id: crypto.randomUUID(),
+            type: 'quick_action',
+            action_type: 'SET_ACCESS_BARRIER',
+            company_id: targetId,
+            access_type: 'LOCKED_DOOR_PHONE_ONLY',
+            notes: 'Curbside barrier logged from mobile HUD: Locked door / Gated'
+          });
+        } catch (queueErr) {
+          console.error('Failed to queue access barrier:', queueErr);
+        }
+      }
+    }, 6000);
+
+    showUndoToast({
+      message: `Marked ${cName} as Locked / Gated (Phone Dial scheduled)`,
+      durationMs: 6000,
+      onUndo: async () => {
+        clearTimeout(timeoutId);
+        applyCompany(prevCompany);
+        showToast(`Reverted barrier for ${cName}.`, 'info');
+      }
+    });
+  });
+}
+
 export function initFieldView() {
   initMap();
   initRadarScan();
@@ -1776,6 +1827,7 @@ export function initFieldView() {
   initGeofenceWatch();
   initCoordinatorToggle();
   initDisqualifyField();
+  initAccessBarrierField();
   updateScoreboard();
 
   window.addEventListener('viewactivated', (event) => {

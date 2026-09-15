@@ -87,6 +87,9 @@ CREATE TABLE IF NOT EXISTS companies (
     cadence_last_touch_at TEXT,
     est_fica_tax_savings REAL DEFAULT 0.00,
     teaser_check_generated_at TEXT,
+    headcount_confidence_score REAL DEFAULT 0.0,
+    qualification_status TEXT DEFAULT 'QUALIFIED' CHECK(qualification_status IN ('QUALIFIED', 'SUB_THRESHOLD', 'NEEDS_AUDIT', 'QUARANTINE')),
+    access_type TEXT DEFAULT 'OPEN_COMMERCIAL' CHECK(access_type IN ('OPEN_COMMERCIAL', 'LOCKED_DOOR_PHONE_ONLY', 'GATED_SECURITY', 'APPOINTMENT_ONLY')),
     sync_version INTEGER DEFAULT 1,
     updated_at_utc TEXT DEFAULT (datetime('now')),
     created_at TEXT DEFAULT (datetime('now')),
@@ -203,6 +206,10 @@ CREATE INDEX IF NOT EXISTS idx_companies_spatial_active
 ON companies (agent_email, status, lat, long) 
 WHERE status = 'ACTIVE' AND lat IS NOT NULL AND long IS NOT NULL;
 
+-- Phase 2 Edge Blueprint: Hard scoring gates & curbside access indexes
+CREATE INDEX IF NOT EXISTS idx_companies_qualification ON companies(agent_email, qualification_status, status);
+CREATE INDEX IF NOT EXISTS idx_companies_access ON companies(agent_email, access_type);
+
 
 -- ---------------------------------------------------------------------
 -- 5. PIPELINE EVENTS — audit log for stage transitions.
@@ -281,6 +288,20 @@ CREATE TABLE IF NOT EXISTS raw_targets (
 CREATE INDEX IF NOT EXISTS idx_raw_targets_status ON raw_targets(status);
 
 -- ---------------------------------------------------------------------
+-- 5e. DO_NOT_CONTACT — suppressed territory accounts (Phase 2 Defenses)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS do_not_contact (
+    dnc_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    street_address TEXT,
+    zip_code TEXT,
+    exclusion_reason TEXT NOT NULL, -- 'EXISTING_ACCOUNT', 'COMPETITOR_BROKER', 'TERRITORY_COLLEAGUE', 'NATIONAL_FRANCHISE'
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_dnc_normalized ON do_not_contact(normalized_name);
+
+-- ---------------------------------------------------------------------
 -- 6. NON-DESTRUCTIVE MIGRATIONS — add new columns to existing production DB.
 --    All listed ALTERs below have been EXECUTED against production D1
 --    on 2026-08-30. They are kept commented as documentation.
@@ -323,4 +344,14 @@ CREATE INDEX IF NOT EXISTS idx_raw_targets_status ON raw_targets(status);
 --   ALTER TABLE activity_logs ADD COLUMN client_timestamp_utc TEXT;
 --   CREATE INDEX IF NOT EXISTS idx_companies_cadence_sweep ...;
 --   CREATE INDEX IF NOT EXISTS idx_companies_spatial_active ...;
+--
+-- Phase 2 Edge Blueprint (migrations/0010_phase2_defenses.sql):
+--   CREATE TABLE IF NOT EXISTS do_not_contact (...);
+--   CREATE INDEX IF NOT EXISTS idx_dnc_normalized ON do_not_contact(normalized_name);
+--   ALTER TABLE companies ADD COLUMN headcount_confidence_score REAL DEFAULT 0.0;
+--   ALTER TABLE companies ADD COLUMN qualification_status TEXT DEFAULT 'QUALIFIED' CHECK(qualification_status IN ('QUALIFIED', 'SUB_THRESHOLD', 'NEEDS_AUDIT', 'QUARANTINE'));
+--   ALTER TABLE companies ADD COLUMN access_type TEXT DEFAULT 'OPEN_COMMERCIAL' CHECK(access_type IN ('OPEN_COMMERCIAL', 'LOCKED_DOOR_PHONE_ONLY', 'GATED_SECURITY', 'APPOINTMENT_ONLY'));
+--   CREATE INDEX IF NOT EXISTS idx_companies_qualification ON companies(agent_email, qualification_status, status);
+--   CREATE INDEX IF NOT EXISTS idx_companies_access ON companies(agent_email, access_type);
+
 

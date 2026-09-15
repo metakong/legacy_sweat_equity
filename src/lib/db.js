@@ -31,6 +31,7 @@ import {
 } from './validate.js';
 import { toSqlTimestamp } from './time.js';
 import { encodeGeohash } from './geo.js';
+import { normalizeName } from './match.js';
 
 /** A field is invalid in a way the caller must be told about. */
 export class ValidationError extends Error {
@@ -79,6 +80,11 @@ export function normalizeCompany(raw) {
   const estimatedW2Count = asCount(raw?.estimated_w2_count, 5_000_000) ?? 0;
   const confidenceScore = asCount(raw?.confidence_score, 100) ?? 30;
   const status = (cleanCapped(raw?.status, 32) || 'ACTIVE').toUpperCase();
+  const headcountConfidenceScore = Number.isFinite(Number(raw?.headcount_confidence_score))
+    ? Number(raw.headcount_confidence_score)
+    : 0.0;
+  const qualificationStatus = matchEnum(raw?.qualification_status, ['QUALIFIED', 'SUB_THRESHOLD', 'NEEDS_AUDIT', 'QUARANTINE']) || 'QUALIFIED';
+  const accessType = matchEnum(raw?.access_type, ['OPEN_COMMERCIAL', 'LOCKED_DOOR_PHONE_ONLY', 'GATED_SECURITY', 'APPOINTMENT_ONLY']) || 'OPEN_COMMERCIAL';
 
   return {
     company_id: companyId,
@@ -131,6 +137,10 @@ export function normalizeCompany(raw) {
     // whatever the row already holds rather than manufacturing a value.
     next_action: cleanCapped(raw?.next_action ?? raw?.next_action_text, 240) || null,
     next_action_date: asIsoDate(raw?.next_action_date) || null,
+    // --- Phase 2 Edge Blueprint fields ---
+    headcount_confidence_score: headcountConfidenceScore,
+    qualification_status: qualificationStatus,
+    access_type: accessType,
     // Presence flags for upsertCompany. Numbers only — D1 cannot bind a
     // boolean, and normalizeCompany is contractually primitives-only.
     __has_current_voluntary_carrier: isSupplied(raw?.current_voluntary_carrier) ? 1 : 0,
@@ -141,6 +151,9 @@ export function normalizeCompany(raw) {
     __has_status: isSupplied(raw?.status) ? 1 : 0,
     __has_next_action: isSupplied(raw?.next_action ?? raw?.next_action_text) ? 1 : 0,
     __has_next_action_date: isSupplied(raw?.next_action_date) ? 1 : 0,
+    __has_headcount_confidence_score: isSupplied(raw?.headcount_confidence_score) ? 1 : 0,
+    __has_qualification_status: isSupplied(raw?.qualification_status) ? 1 : 0,
+    __has_access_type: isSupplied(raw?.access_type) ? 1 : 0,
     // A record only counts as synced once it carries the D365 identity that
     // proves it round-tripped. Trusting a client-sent flag here is how
     // net-new leads silently drop out of the Tier 3 export.
@@ -178,10 +191,11 @@ export function buildCompanyStatement(db, company, userEmail) {
       current_voluntary_carrier, major_medical_carrier, is_hdhp,
       estimated_w2_count, confidence_score, geohash, status,
       next_action, next_action_date, sync_version,
+      headcount_confidence_score, qualification_status, access_type,
       agent_email
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(company_id, agent_email) DO UPDATE SET
       d365_lead_id        = COALESCE(excluded.d365_lead_id, companies.d365_lead_id),
@@ -226,6 +240,9 @@ export function buildCompanyStatement(db, company, userEmail) {
       status                    = CASE WHEN ? = 1 THEN excluded.status                    ELSE companies.status                    END,
       next_action               = CASE WHEN ? = 1 THEN excluded.next_action               ELSE companies.next_action               END,
       next_action_date          = CASE WHEN ? = 1 THEN excluded.next_action_date          ELSE companies.next_action_date          END,
+      headcount_confidence_score = CASE WHEN ? = 1 THEN excluded.headcount_confidence_score ELSE companies.headcount_confidence_score END,
+      qualification_status       = CASE WHEN ? = 1 THEN excluded.qualification_status       ELSE companies.qualification_status END,
+      access_type                = CASE WHEN ? = 1 THEN excluded.access_type                ELSE companies.access_type END,
       sync_version              = MAX(COALESCE(excluded.sync_version, 1), companies.sync_version),
       geohash = CASE
         WHEN excluded.lat IS NOT NULL AND excluded.long IS NOT NULL THEN excluded.geohash
@@ -273,6 +290,9 @@ export function buildCompanyStatement(db, company, userEmail) {
     company.next_action ?? null,
     company.next_action_date ?? null,
     company.sync_version ?? 1,
+    company.headcount_confidence_score ?? 0.0,
+    company.qualification_status ?? 'QUALIFIED',
+    company.access_type ?? 'OPEN_COMMERCIAL',
     userEmail,
     company.__has_current_voluntary_carrier ?? 0,
     company.__has_major_medical_carrier ?? 0,
@@ -281,14 +301,64 @@ export function buildCompanyStatement(db, company, userEmail) {
     company.__has_confidence_score ?? 0,
     company.__has_status ?? 0,
     company.__has_next_action ?? 0,
-    company.__has_next_action_date ?? 0
+    company.__has_next_action_date ?? 0,
+    company.__has_headcount_confidence_score ?? 0,
+    company.__has_qualification_status ?? 0,
+    company.__has_access_type ?? 0
   );
 }
 
+/**
+ * Check if a company is suppressed in the do_not_contact table.
+ *
+ * @param {object} db - D1Database
+ * @param {string} companyName - Company name to check
+ * @param {string} [streetAddress] - Optional street address
+ * @returns {Promise<{ suppressed: boolean, reason?: string }>}
+ */
+export async function checkDncSuppression(db, companyName, streetAddress) {
+  if (!companyName || !db || typeof db.prepare !== 'function') return { suppressed: false };
+  const normalized = normalizeName(companyName);
+  if (!normalized) return { suppressed: false };
+
+  const cleanAddress = typeof streetAddress === 'string' && streetAddress.trim() ? streetAddress.trim() : null;
+
+  try {
+    const bound = db.prepare(`
+      SELECT exclusion_reason
+      FROM do_not_contact
+      WHERE normalized_name = ?
+         OR (? LIKE (normalized_name || '%') AND length(normalized_name) >= 3)
+         OR (normalized_name LIKE (? || '%') AND length(?) >= 3)
+         OR (? IS NOT NULL AND street_address IS NOT NULL AND LOWER(TRIM(street_address)) = LOWER(TRIM(?)))
+      LIMIT 1
+    `).bind(normalized, normalized, normalized, normalized, cleanAddress, cleanAddress);
+
+    const row = typeof bound.first === 'function'
+      ? await bound.first()
+      : (typeof bound.all === 'function' ? (await bound.all())?.results?.[0] : null);
+
+    if (row && row.exclusion_reason) {
+      return { suppressed: true, reason: row.exclusion_reason };
+    }
+  } catch (_) {
+    // Non-fatal if table not yet queried or mock environment
+  }
+  return { suppressed: false };
+}
+
 export async function upsertCompany(db, company, userEmail) {
-  const stmt = buildCompanyStatement(db, company, userEmail);
+  const target = company.company_id ? company : normalizeCompany(company);
+  const dnc = await checkDncSuppression(db, target.company_name, target.street_1);
+  if (dnc && dnc.suppressed) {
+    target.status = 'SUPPRESSED_TERRITORY';
+    target.qualification_status = 'SUB_THRESHOLD';
+    target.__has_status = 1;
+    target.__has_qualification_status = 1;
+  }
+  const stmt = buildCompanyStatement(db, target, userEmail);
   await stmt.run();
-  return company.company_id;
+  return target.company_id;
 }
 
 /** Move a company's D365 Rating without touching anything else. */

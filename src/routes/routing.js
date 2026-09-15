@@ -156,6 +156,34 @@ export function heuristicSequence(stops) {
 }
 
 /**
+ * Fetch unvisited / active companies eligible for in-person routing.
+ * Excludes accounts marked LOCKED_DOOR_PHONE_ONLY, GATED_SECURITY, or APPOINTMENT_ONLY.
+ */
+export async function fetchUnvisitedCompanies(db, userEmail, options = {}) {
+  userEmail = userEmail || 'sean_deardorff@us.aflac.com';
+  let query = `
+    SELECT company_id, company_name, street_1, city, state, zip_code, lat, long, 
+           COALESCE(employees, estimated_w2_count, 3) AS employees,
+           estimated_w2_count, industry, pipeline_stage, decision_maker, company_phone, access_type
+    FROM companies 
+    WHERE agent_email = ? 
+      AND status = 'ACTIVE' 
+      AND lat IS NOT NULL AND long IS NOT NULL 
+      AND pipeline_stage NOT IN ('DISQUALIFIED', 'CLOSED_LOST', 'CLOSED_WON')
+      AND (access_type IS NULL OR access_type = 'OPEN_COMMERCIAL')
+  `;
+  const binds = [userEmail];
+
+  if (options.industry && typeof options.industry === 'string' && options.industry.trim()) {
+    query += ` AND industry LIKE ?`;
+    binds.push(`%${options.industry.trim()}%`);
+  }
+
+  const { results } = await db.prepare(query).bind(...binds).all();
+  return Array.isArray(results) ? results : [];
+}
+
+/**
  * Body: {
  *   company_ids: [...],                       // resolved against D1, OR
  *   stops: [{ company_id, company_name, lat, long }],
@@ -193,26 +221,7 @@ routing.post('/optimize', async (c) => {
     const stopLimit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 30) : 25;
 
     const industryFilter = typeof body?.industry === 'string' && body.industry.trim() ? body.industry.trim() : null;
-
-    let query = `
-      SELECT company_id, company_name, street_1, city, state, zip_code, lat, long, 
-             COALESCE(employees, estimated_w2_count, 3) AS employees,
-             estimated_w2_count, industry, pipeline_stage, decision_maker, company_phone
-      FROM companies 
-      WHERE agent_email = ? 
-        AND status = 'ACTIVE' 
-        AND lat IS NOT NULL AND long IS NOT NULL 
-        AND pipeline_stage NOT IN ('DISQUALIFIED', 'CLOSED_LOST', 'CLOSED_WON')
-    `;
-    const binds = [userEmail];
-
-    if (industryFilter) {
-      query += ` AND industry LIKE ?`;
-      binds.push(`%${industryFilter}%`);
-    }
-
-    const { results } = await c.env.DB.prepare(query).bind(...binds).all();
-    const candidates = Array.isArray(results) ? results : [];
+    const candidates = await fetchUnvisitedCompanies(c.env.DB, userEmail, { industry: industryFilter });
 
     const scored = [];
     for (const cand of candidates) {
@@ -298,9 +307,10 @@ routing.post('/optimize', async (c) => {
     const { results } = await c.env.DB.prepare(`
       SELECT company_id, company_name, street_1, city, state, zip_code, lat, long, 
              COALESCE(employees, estimated_w2_count, 3) AS employees,
-             estimated_w2_count, industry
+             estimated_w2_count, industry, access_type
       FROM companies
       WHERE company_id IN (${placeholders}) AND lat IS NOT NULL AND long IS NOT NULL AND agent_email = ?
+        AND (access_type IS NULL OR access_type = 'OPEN_COMMERCIAL')
     `).bind(...companyIds, userEmail).all();
     stops = results || [];
   } else if (Array.isArray(body?.stops)) {
@@ -314,8 +324,9 @@ routing.post('/optimize', async (c) => {
       lat: asLatitude(s?.lat),
       long: asLongitude(s?.long ?? s?.lng),
       employees: Number(s?.employees || s?.estimated_w2_count || 3),
-      industry: cleanCapped(s?.industry, LIMITS.industry)
-    }));
+      industry: cleanCapped(s?.industry, LIMITS.industry),
+      access_type: s?.access_type || null
+    })).filter((s) => !s.access_type || s.access_type === 'OPEN_COMMERCIAL');
   }
 
   // A stop without coordinates cannot be routed. Report it rather than

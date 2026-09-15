@@ -420,6 +420,57 @@ activity.post('/', async (c) => {
     return c.json({ error: 'Malformed JSON body' }, 400);
   }
 
+  // Quick action for curbside access barrier (e.g., locked door, gated security)
+  const actionType = body?.action_type || body?.action;
+  if (actionType === 'SET_ACCESS_BARRIER') {
+    const companyId = asId(body?.company_id);
+    if (!companyId) return c.json({ error: 'company_id is required' }, 400);
+
+    if (!(await companyExists(c.env.DB, companyId, userEmail))) {
+      return c.json({ error: 'Unknown company_id' }, 404);
+    }
+
+    const accessType = matchEnum(body?.access_type, [
+      'OPEN_COMMERCIAL',
+      'LOCKED_DOOR_PHONE_ONLY',
+      'GATED_SECURITY',
+      'APPOINTMENT_ONLY'
+    ]) || 'LOCKED_DOOR_PHONE_ONLY';
+
+    const notes = cleanCapped(body?.notes, LIMITS.notes, { allowNewlines: true });
+    const today = businessDate();
+
+    await c.env.DB.prepare(`
+      UPDATE companies
+      SET access_type = ?,
+          next_action = 'PHONE_POWER_DIAL',
+          next_action_date = ?,
+          notes = CASE
+            WHEN ? IS NULL OR TRIM(?) = '' THEN notes
+            WHEN notes IS NULL OR TRIM(notes) = '' THEN ?
+            WHEN instr(notes, ?) > 0 THEN notes
+            ELSE notes || char(10) || char(10) || ?
+          END,
+          sync_version = sync_version + 1,
+          updated_at_utc = datetime('now')
+      WHERE company_id = ? AND agent_email = ?
+    `).bind(
+      accessType,
+      today,
+      notes, notes, notes, notes, notes,
+      companyId,
+      userEmail
+    ).run();
+
+    return c.json({
+      success: true,
+      company_id: companyId,
+      access_type: accessType,
+      next_action: 'PHONE_POWER_DIAL',
+      next_action_date: today
+    });
+  }
+
   // Quick Drop (Agency OS dialer / canvass) takes precedence whenever the
   // disposition is one of the SCREAMING_SNAKE values, which the legacy silent-log
   // path can never produce.
@@ -712,6 +763,52 @@ root.post('/sync', async (c) => {
 
   for (const entry of logs) {
     try {
+      if (entry?.action_type === 'SET_ACCESS_BARRIER' || entry?.type === 'SET_ACCESS_BARRIER') {
+        const companyId = asId(entry?.company_id);
+        if (!companyId) throw new ValidationError('company_id is required');
+        if (!(await companyExists(c.env.DB, companyId, userEmail))) {
+          throw new ValidationError('Unknown company_id');
+        }
+        const accessType = matchEnum(entry?.access_type, [
+          'OPEN_COMMERCIAL',
+          'LOCKED_DOOR_PHONE_ONLY',
+          'GATED_SECURITY',
+          'APPOINTMENT_ONLY'
+        ]) || 'LOCKED_DOOR_PHONE_ONLY';
+        const notes = cleanCapped(entry?.notes, LIMITS.notes, { allowNewlines: true });
+        const today = businessDate();
+
+        const entryStatements = [c.env.DB.prepare(`
+          UPDATE companies
+          SET access_type = ?,
+              next_action = 'PHONE_POWER_DIAL',
+              next_action_date = ?,
+              notes = CASE
+                WHEN ? IS NULL OR TRIM(?) = '' THEN notes
+                WHEN notes IS NULL OR TRIM(notes) = '' THEN ?
+                WHEN instr(notes, ?) > 0 THEN notes
+                ELSE notes || char(10) || char(10) || ?
+              END,
+              sync_version = sync_version + 1,
+              updated_at_utc = datetime('now')
+          WHERE company_id = ? AND agent_email = ?
+        `).bind(
+          accessType,
+          today,
+          notes, notes, notes, notes, notes,
+          companyId,
+          userEmail
+        )];
+
+        if (batchChunk.length + entryStatements.length > BATCH_CHUNK_LIMIT && batchChunk.length > 0) {
+          await flushBatch();
+        }
+        for (const stmt of entryStatements) batchChunk.push(stmt);
+        pendingLogIds.push(entry?.log_id || crypto.randomUUID());
+        if (batchChunk.length >= BATCH_CHUNK_LIMIT) await flushBatch();
+        continue;
+      }
+
       let companyId = asId(entry?.company_id);
       const entryStatements = [];
 

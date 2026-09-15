@@ -548,6 +548,63 @@ export function mountCanvassView(container, options = {}) {
         }
       });
 
+      const lockedGatedBtn = el('button', {
+        className: 'btn btn-warning',
+        text: '🔒 Locked / Gated',
+        attrs: { type: 'button', style: 'margin-top: 8px; margin-right: 8px; padding: 4px 8px; font-size: 13px; background-color: #d97706; color: white; border-radius: 4px; border: none; font-weight: 600;' },
+        on: {
+          click: async (e) => {
+            const btn = e.target;
+            const li = btn.closest('li');
+            if (li) li.style.display = 'none';
+
+            let committed = false;
+            const targetId = stop.company_id;
+            const cName = stop.company_name || 'Account';
+
+            const timeoutId = setTimeout(async () => {
+              committed = true;
+              try {
+                await apiPost('/api/activity', {
+                  action_type: 'SET_ACCESS_BARRIER',
+                  company_id: targetId,
+                  access_type: 'LOCKED_DOOR_PHONE_ONLY',
+                  notes: 'Curbside barrier: Locked door / Gated'
+                });
+                if (li) li.remove();
+              } catch (err) {
+                try {
+                  const { enqueue } = await import('../store.js');
+                  await enqueue({
+                    log_id: crypto.randomUUID(),
+                    type: 'quick_action',
+                    action_type: 'SET_ACCESS_BARRIER',
+                    company_id: targetId,
+                    access_type: 'LOCKED_DOOR_PHONE_ONLY',
+                    notes: 'Curbside barrier: Locked door / Gated'
+                  });
+                  if (li) li.remove();
+                } catch (queueErr) {
+                  console.error('Background access barrier failed:', queueErr);
+                  if (li) li.style.display = '';
+                  showToast(err.message, 'error');
+                }
+              }
+            }, 6000);
+
+            showUndoToast({
+              message: `Marked ${cName} as Locked / Gated (Phone Touch scheduled)`,
+              durationMs: 6000,
+              onUndo: async () => {
+                clearTimeout(timeoutId);
+                if (li) li.style.display = '';
+                showToast(`Reverted access barrier for ${cName}.`, 'info');
+              }
+            });
+          }
+        }
+      });
+
       list.append(el('li', {
         className: `canvass-stop${hasCoordinates(stop) ? '' : ' canvass-stop-unroutable'}`,
         children: [
@@ -564,7 +621,7 @@ export function mountCanvassView(container, options = {}) {
               text: `📞 ${stop.next_action_date}: ${stop.next_action || 'callback promised'}`
             })
             : null,
-          el('div', { className: 'canvass-stop-actions' }, [disqualifyBtn])
+          el('div', { className: 'canvass-stop-actions' }, [lockedGatedBtn, disqualifyBtn])
         ].filter(Boolean)
       }));
     }

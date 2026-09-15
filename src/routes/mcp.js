@@ -9,10 +9,10 @@ import { McpServer } from '@cloudflare/mcp-server/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@cloudflare/mcp-server/server/webStandardStreamableHttp.js';
 import { businessDate, businessDayRangeUtc } from '../lib/time.js';
 import { CompanyMatcher } from '../lib/match.js';
-import { snoozeCompany } from '../lib/db.js';
+import { snoozeCompany, checkDncSuppression } from '../lib/db.js';
 import { getIndustryMultiplier, calculateEpv, buildIndustryHook, heuristicSequence, haversineMiles } from './routing.js';
 import { advanceCadence } from '../lib/cadence.js';
-import { generateTeaserCheckPayload } from '../lib/tax.js';
+import { generateTeaserCheckPayload, calculateFicaSavings } from '../lib/tax.js';
 import { tavilySearch } from '../lib/ai.js';
 
 const mcpRouter = new Hono();
@@ -252,16 +252,20 @@ export function createMcpServer(env) {
         const { results } = await env.DB.prepare(`
           SELECT company_id, company_name, street_1, city, zip_code, lat, long,
                  COALESCE(employees, estimated_w2_count, 3) AS employees,
-                 estimated_w2_count, industry, decision_maker, confidence_score, status
+                 estimated_w2_count, industry, decision_maker, confidence_score, status, access_type
           FROM companies
           WHERE company_id IN (${placeholders}) AND agent_email = ? AND lat IS NOT NULL AND long IS NOT NULL
         `).bind(...company_ids, DEFAULT_AGENT_EMAIL).all();
-        stops = Array.isArray(results) ? results : [];
+        let rawStops = Array.isArray(results) ? results : [];
+        if (mode === 'FIELD') {
+          rawStops = rawStops.filter(s => !s.access_type || s.access_type === 'OPEN_COMMERCIAL');
+        }
+        stops = rawStops;
       } else {
         let sql = `
           SELECT company_id, company_name, street_1, city, zip_code, lat, long,
                  COALESCE(employees, estimated_w2_count, 3) AS employees,
-                 estimated_w2_count, industry, decision_maker, confidence_score, status
+                 estimated_w2_count, industry, decision_maker, confidence_score, status, access_type
           FROM companies
           WHERE agent_email = ?
             AND status NOT IN ('DISQUALIFIED', 'DO_NOT_CONTACT')
@@ -270,7 +274,7 @@ export function createMcpServer(env) {
         const binds = [DEFAULT_AGENT_EMAIL];
 
         if (mode === 'FIELD') {
-          sql += ' AND confidence_score >= 70';
+          sql += ' AND confidence_score >= 70 AND (access_type IS NULL OR access_type = \'OPEN_COMMERCIAL\')';
         } else if (mode === 'PHONE') {
           sql += ' AND confidence_score BETWEEN 30 AND 79';
         }
@@ -663,6 +667,211 @@ export function createMcpServer(env) {
             sos_data: sosResult,
             company: fallbackCompany
           }, null, 2)
+        }]
+      };
+    }
+  );
+
+  server.tool(
+    'batch_ingest_prospects',
+    'Batch ingest vetted commercial prospect accounts with deterministic pre-flight gates, headcount confidence checks, DNC screening, and precision Section 125 FICA calculations.',
+    {
+      prospects: z.array(z.object({
+        business_name: z.string().describe('Business / company name'),
+        street_address: z.string().describe('Physical street address including number'),
+        city: z.string().optional().default('Springfield').describe('City (default: Springfield)'),
+        state: z.string().optional().default('MO').describe('State (default: MO)'),
+        zip_code: z.string().optional().describe('5-digit ZIP code'),
+        estimated_w2_count: z.number().int().optional().describe('Estimated W-2 headcount'),
+        headcount_confidence_score: z.number().optional().describe('Confidence probability P(W2 >= 5) between 0.0 and 1.0'),
+        dm_name: z.string().optional().describe('Decision maker full name'),
+        dm_title: z.string().optional().describe('Decision maker title'),
+        source_url: z.string().describe('Strict Citation Contract source URL'),
+        industry: z.string().optional().describe('Industry category'),
+        notes: z.string().optional().describe('Additional prospecting notes')
+      })).min(1).max(25).describe('List of prospects to ingest (1-25)')
+    },
+    async ({ prospects }) => {
+      let insertedActive = 0;
+      let suppressedDnc = 0;
+      let rejectedSubThreshold = 0;
+      let rejectedInvalid = 0;
+      let samplePvp = null;
+
+      const BATCH_CHUNK_LIMIT = 25;
+      const statements = [];
+
+      for (const p of prospects) {
+        // Gate 1: Address & Citation Check
+        const sourceUrl = typeof p.source_url === 'string' ? p.source_url.trim() : '';
+        const streetAddr = typeof p.street_address === 'string' ? p.street_address.trim() : '';
+        const businessName = typeof p.business_name === 'string' ? p.business_name.trim() : '';
+
+        // Drop immediately if source_url is empty/missing or street_address is incomplete (must have digits/number)
+        if (!sourceUrl || !streetAddr || !/\d/.test(streetAddr) || !businessName) {
+          rejectedInvalid++;
+          continue;
+        }
+
+        // Gate 2: Headcount Gate: If estimated_w2_count < 5 or (headcount_confidence_score is provided and < 0.50)
+        const w2 = p.estimated_w2_count !== undefined && p.estimated_w2_count !== null
+          ? Number(p.estimated_w2_count)
+          : null;
+        const confScore = p.headcount_confidence_score !== undefined && p.headcount_confidence_score !== null
+          ? Number(p.headcount_confidence_score)
+          : null;
+
+        if ((w2 !== null && w2 < 5) || (confScore !== null && confScore < 0.50)) {
+          rejectedSubThreshold++;
+          continue;
+        }
+
+        // Gate 3: DNC Screen
+        const dnc = await checkDncSuppression(env.DB, businessName, streetAddr);
+        if (dnc && dnc.suppressed) {
+          suppressedDnc++;
+          continue;
+        }
+
+        // Gate 4: Precision FICA Calculation
+        const w2Count = w2 || 10;
+        const fica = calculateFicaSavings(w2Count, 0.70, 120.0);
+        const perEmpFormatted = '$' + fica.per_employee_annual_savings.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const smartCallingPvp = `We are helping local commercial employers permanently recapture exactly 7.65% in matching FICA tax liabilities—averaging ${perEmpFormatted} per participating employee annually—which for a shop your size equates to ${fica.formatted_savings} directly back to the bottom line.`;
+
+        if (!samplePvp) {
+          samplePvp = smartCallingPvp;
+        }
+
+        // Persistence
+        let existing = null;
+        try {
+          const bound = env.DB.prepare(
+            'SELECT company_id, sync_version FROM companies WHERE LOWER(company_name) = LOWER(?) AND agent_email = ? LIMIT 1'
+          ).bind(businessName, DEFAULT_AGENT_EMAIL);
+          existing = typeof bound.first === 'function'
+            ? await bound.first()
+            : (typeof bound.all === 'function' ? (await bound.all())?.results?.[0] : null);
+        } catch (_) {}
+
+        const companyId = existing?.company_id || crypto.randomUUID();
+        const syncVersion = (existing?.sync_version || 1) + 1;
+        const city = (p.city || 'Springfield').trim();
+        const state = (p.state || 'MO').trim();
+        const zip = p.zip_code ? p.zip_code.trim() : null;
+        const industry = p.industry ? p.industry.trim() : null;
+        const dm = p.dm_name ? p.dm_name.trim() : null;
+
+        const combinedNotes = [
+          p.notes ? p.notes.trim() : null,
+          `Source Citation: ${sourceUrl}`,
+          `Smart Calling PVP: ${smartCallingPvp}`
+        ].filter(Boolean).join('\n\n');
+
+        statements.push(
+          env.DB.prepare(`
+            INSERT INTO companies (
+              company_id, company_name, street_1, city, state, zip_code,
+              industry, lead_source, rating, pipeline_stage, status, verification_status,
+              qualification_status, headcount_confidence_score, confidence_score,
+              decision_maker, notes, estimated_w2_count, est_fica_tax_savings,
+              sync_version, access_type, agent_email, updated_at_utc, created_at
+            ) VALUES (
+              ?, ?, ?, ?, ?, ?,
+              ?, 'MCP Ingest', 'Warm', 'PROSPECT', 'ACTIVE', 'FIELD_VERIFIED',
+              'QUALIFIED', ?, ?,
+              ?, ?, ?, ?,
+              ?, 'OPEN_COMMERCIAL', ?, datetime('now'), datetime('now')
+            )
+            ON CONFLICT(company_id, agent_email) DO UPDATE SET
+              company_name = excluded.company_name,
+              street_1 = excluded.street_1,
+              city = excluded.city,
+              state = excluded.state,
+              zip_code = COALESCE(excluded.zip_code, companies.zip_code),
+              industry = COALESCE(excluded.industry, companies.industry),
+              verification_status = 'FIELD_VERIFIED',
+              qualification_status = 'QUALIFIED',
+              headcount_confidence_score = excluded.headcount_confidence_score,
+              confidence_score = excluded.confidence_score,
+              decision_maker = COALESCE(excluded.decision_maker, companies.decision_maker),
+              notes = CASE
+                WHEN excluded.notes IS NULL OR TRIM(excluded.notes) = '' THEN companies.notes
+                WHEN companies.notes IS NULL OR TRIM(companies.notes) = '' THEN excluded.notes
+                WHEN instr(companies.notes, excluded.notes) > 0 THEN companies.notes
+                ELSE companies.notes || char(10) || char(10) || excluded.notes
+              END,
+              estimated_w2_count = excluded.estimated_w2_count,
+              est_fica_tax_savings = excluded.est_fica_tax_savings,
+              sync_version = companies.sync_version + 1,
+              updated_at_utc = datetime('now')
+          `).bind(
+            companyId,
+            businessName,
+            streetAddr,
+            city,
+            state,
+            zip,
+            industry,
+            confScore !== null ? confScore : 0.70,
+            confScore !== null ? Math.round(confScore * 100) : 70,
+            dm,
+            combinedNotes,
+            w2Count,
+            fica.employer_fica_savings,
+            syncVersion,
+            DEFAULT_AGENT_EMAIL
+          )
+        );
+
+        if (dm) {
+          const parts = dm.split(/\s+/);
+          const firstName = parts[0] || '';
+          const lastName = parts.slice(1).join(' ') || '';
+          const contactId = crypto.randomUUID();
+
+          statements.push(
+            env.DB.prepare(`
+              INSERT INTO contacts (
+                contact_id, company_id, first_name, last_name, job_title, is_primary_dm, agent_email
+              ) VALUES (?, ?, ?, ?, ?, 1, ?)
+              ON CONFLICT(contact_id, agent_email) DO UPDATE SET
+                first_name = excluded.first_name,
+                last_name = excluded.last_name,
+                job_title = excluded.job_title
+            `).bind(
+              contactId,
+              companyId,
+              firstName,
+              lastName,
+              p.dm_title ? p.dm_title.trim() : 'Decision Maker',
+              DEFAULT_AGENT_EMAIL
+            )
+          );
+        }
+
+        insertedActive++;
+      }
+
+      // Execute statements in atomic chunks of <= 25 statements
+      for (let i = 0; i < statements.length; i += BATCH_CHUNK_LIMIT) {
+        const chunk = statements.slice(i, i + BATCH_CHUNK_LIMIT);
+        await env.DB.batch(chunk);
+      }
+
+      const summary = {
+        total_received: prospects.length,
+        inserted_active: insertedActive,
+        suppressed_dnc: suppressedDnc,
+        rejected_sub_threshold: rejectedSubThreshold,
+        rejected_invalid: rejectedInvalid,
+        sample_pvp: samplePvp
+      };
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(summary, null, 2)
         }]
       };
     }

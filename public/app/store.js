@@ -468,17 +468,25 @@ export async function syncQueue() {
         }
       } else if (entry.type === 'quick_action') {
         try {
+          const body = entry.action_type === 'SET_ACCESS_BARRIER'
+            ? {
+                action_type: 'SET_ACCESS_BARRIER',
+                company_id: entry.company_id,
+                access_type: entry.access_type,
+                notes: entry.notes
+              }
+            : {
+                company_id: entry.company_id,
+                disposition: entry.disposition,
+                mode: entry.mode,
+                next_action: entry.next_action,
+                next_action_date: entry.next_action_date,
+                timestamp: entry.timestamp
+              };
           const res = await fetch('/api/activity', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              company_id: entry.company_id,
-              disposition: entry.disposition,
-              mode: entry.mode,
-              next_action: entry.next_action,
-              next_action_date: entry.next_action_date,
-              timestamp: entry.timestamp
-            })
+            body: JSON.stringify(body)
           });
           if (!res.ok) {
             const error = new Error(`Quick action rejected (${res.status})`);

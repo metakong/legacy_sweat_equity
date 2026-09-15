@@ -147,6 +147,14 @@ function buildMigratedDb() {
   for (const statement of statementsOf('migrations/0008_phase3_enterprise.sql')) {
     raw.exec(statement);
   }
+  // 0009 adds raw_targets staging table
+  for (const statement of statementsOf('migrations/0009_raw_targets.sql')) {
+    raw.exec(statement);
+  }
+  // 0010 adds phase 2 defenses: do_not_contact table and companies columns/indexes
+  for (const statement of statementsOf('migrations/0010_phase2_defenses.sql')) {
+    raw.exec(statement);
+  }
   raw.close();
   return file;
 }

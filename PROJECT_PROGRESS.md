@@ -4,7 +4,34 @@
 
 > **Note**: Everything below the 2026-08-29 entry describes **Legacy Sweat Equity**, the
 > B2C roofing canvassing app this project used to be. It is retained as history only.
-> None of that code, schema, or UI still exists.
+## 2026-09-15 16:00 CDT — Phase 2: Edge Blueprint (Hard Scoring Gates, Native DNC, & Batch MCP Ingestion)
+
+### Summary
+Implemented Phase 2 architectural defenses across Cloudflare Worker edge backend and PWA client:
+1. **D1 Schema Migration (`migrations/0010_phase2_defenses.sql` & `schema.sql`)**:
+   - Created `do_not_contact` table (`dnc_id`, `company_name`, `normalized_name`, `street_address`, `zip_code`, `exclusion_reason`, `created_at`) and `idx_dnc_normalized`.
+   - Added `headcount_confidence_score REAL DEFAULT 0.0`, `qualification_status TEXT DEFAULT 'QUALIFIED' CHECK(qualification_status IN ('QUALIFIED', 'SUB_THRESHOLD', 'NEEDS_AUDIT', 'QUARANTINE'))`, and `access_type TEXT DEFAULT 'OPEN_COMMERCIAL' CHECK(access_type IN ('OPEN_COMMERCIAL', 'LOCKED_DOOR_PHONE_ONLY', 'GATED_SECURITY', 'APPOINTMENT_ONLY'))` to `companies`.
+   - Added indexes `idx_companies_qualification` and `idx_companies_access`.
+   - Executed migration against remote production D1 (`legacy-db` `847928be-c56f-4de4-bff4-083e08db9140`): 7 queries executed, 1368 rows written.
+2. **Native DNC Matching & Suppression (`src/lib/db.js`)**:
+   - Implemented `checkDncSuppression(db, companyName, streetAddress)` using `normalizeName()` for normalized company name matching and exact street address matching.
+   - Updated `normalizeCompany()` and `buildCompanyStatement()` to bind and persist `headcount_confidence_score`, `qualification_status`, and `access_type`.
+   - Updated `upsertCompany()` to screen against DNC and automatically set `status = 'SUPPRESSED_TERRITORY'` and `qualification_status = 'SUB_THRESHOLD'`.
+3. **`batch_ingest_prospects` MCP Tool (`src/routes/mcp.js`)**:
+   - Implemented Gate 1: address check (must contain street digits) and citation URL validation.
+   - Implemented Gate 2: headcount threshold ($W2 \ge 5$ and confidence $\ge 0.50$).
+   - Implemented Gate 3: native DNC screening via `checkDncSuppression()`.
+   - Implemented Gate 4: precision FICA calculation via `calculateFicaSavings()` ($W2 \times 750$), PVP hook and source citation notes appending, primary DM contact creation, and chunked D1 execution ($\le 25$ statements).
+   - Enforced maximum batch size of 25 prospects via Zod schema.
+   - Filtered out barrier access types (`LOCKED_DOOR_PHONE_ONLY`, `GATED_SECURITY`, `APPOINTMENT_ONLY`) in `generate_route_manifest` when `mode === 'FIELD'`.
+4. **Curbside Access Barrier Handling & Spatial Routing**:
+   - Updated `fetchUnvisitedCompanies()` in `src/routes/routing.js` to exclude barrier access types (`access_type IS NULL OR access_type = 'OPEN_COMMERCIAL'`).
+   - Implemented `action_type: 'SET_ACCESS_BARRIER'` in `POST /api/activity` and `POST /api/sync` (`src/routes/activity.js`), setting `access_type`, `next_action = 'PHONE_POWER_DIAL'`, and today's `next_action_date`.
+   - Added `[🔒 Locked / Gated]` button (`#btnAccessBarrierField`) in mobile HUD (`public/app/index.html` and `public/app/field.js`) and in canvass stop cards (`public/app/modules/canvass-view.js`) with 6-second interactive undo toasts and offline IndexedDB queuing (`public/app/store.js`).
+5. **Testing & Verification**:
+   - Updated `test/schema.test.js` to apply migrations `0009` and `0010`.
+   - Created `test/phase2_defenses.test.js` with 11 unit tests covering DNC matching, Gates 1–4, batch limits, `SET_ACCESS_BARRIER`, and routing exclusions (11/11 passing).
+   - Verified full test suite: 394 passing, 0 failing across all test files (`npm test`).
 
 ## 2026-09-14 22:45 UTC (2026-09-14 17:45 CDT) — Phase 3: Full-Stack Enterprise Refactor (Sales Velocity, Universal Reversibility, Autonomous Routing & MCP Advancement)
 
