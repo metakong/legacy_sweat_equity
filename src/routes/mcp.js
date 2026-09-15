@@ -713,18 +713,21 @@ export function createMcpServer(env) {
           continue;
         }
 
-        // Gate 2: Headcount Gate: If estimated_w2_count < 5 or (headcount_confidence_score is provided and < 0.50)
-        const w2 = p.estimated_w2_count !== undefined && p.estimated_w2_count !== null
+        // Gate 2: Headcount Gate (100% Confidence Floor & W-2 >= 5)
+        const estimated_w2_count = p.estimated_w2_count !== undefined && p.estimated_w2_count !== null
           ? Number(p.estimated_w2_count)
-          : null;
-        const confScore = p.headcount_confidence_score !== undefined && p.headcount_confidence_score !== null
+          : 0;
+        const headcount_confidence_score = p.headcount_confidence_score !== undefined && p.headcount_confidence_score !== null
           ? Number(p.headcount_confidence_score)
-          : null;
+          : 0;
 
-        if ((w2 !== null && w2 < 5) || (confScore !== null && confScore < 0.50)) {
+        if (estimated_w2_count < 5 || headcount_confidence_score < 1.0) {
           rejectedSubThreshold++;
           continue;
         }
+
+        const w2 = estimated_w2_count;
+        const confScore = headcount_confidence_score;
 
         // Gate 3: DNC Screen
         const dnc = await checkDncSuppression(env.DB, businessName, streetAddr);

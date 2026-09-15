@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Phase 2 Edge Defenses Test Suite
  *
  * Verifies deterministic pre-flight gates, native DNC screening,
@@ -126,7 +126,7 @@ test('batch_ingest_prospects enforces Gate 1 (address & citation URL)', async ()
             business_name: 'No Number Clinic',
             street_address: 'Sunshine Street',
             estimated_w2_count: 10,
-            headcount_confidence_score: 0.8,
+            headcount_confidence_score: 1.0,
             source_url: 'https://example.com/source'
           },
           {
@@ -134,7 +134,7 @@ test('batch_ingest_prospects enforces Gate 1 (address & citation URL)', async ()
             business_name: 'No Citation HVAC',
             street_address: '100 Commercial St',
             estimated_w2_count: 10,
-            headcount_confidence_score: 0.8,
+            headcount_confidence_score: 1.0,
             source_url: ''
           }
         ]
@@ -149,7 +149,7 @@ test('batch_ingest_prospects enforces Gate 1 (address & citation URL)', async ()
   assert.equal(data.inserted_active, 0);
 });
 
-test('batch_ingest_prospects enforces Gate 2 (W-2 >= 5 and confidence >= 0.50)', async () => {
+test('batch_ingest_prospects enforces Gate 2 (W-2 >= 5 and confidence >= 1.0)', async () => {
   const env = { DB: createD1(tempDbPath()), MCP_SECRET_KEY: 'local_dev_key' };
 
   const payload = {
@@ -165,15 +165,15 @@ test('batch_ingest_prospects enforces Gate 2 (W-2 >= 5 and confidence >= 0.50)',
             business_name: 'Small Bakery',
             street_address: '120 S Campbell Ave',
             estimated_w2_count: 4,
-            headcount_confidence_score: 0.9,
+            headcount_confidence_score: 1.0,
             source_url: 'https://example.com/bakery'
           },
           {
-            // Low confidence (< 0.50)
+            // Low confidence (< 1.0)
             business_name: 'Uncertain Auto Repair',
             street_address: '340 N Boonville Ave',
             estimated_w2_count: 12,
-            headcount_confidence_score: 0.40,
+            headcount_confidence_score: 0.95,
             source_url: 'https://example.com/autorepair'
           }
         ]
@@ -208,7 +208,7 @@ test('batch_ingest_prospects enforces Gate 3 (DNC screening)', async () => {
             business_name: 'Banned Transport Co',
             street_address: '800 W Division St',
             estimated_w2_count: 20,
-            headcount_confidence_score: 0.95,
+            headcount_confidence_score: 1.0,
             source_url: 'https://example.com/banned'
           }
         ]
@@ -241,7 +241,7 @@ test('batch_ingest_prospects executes Gate 4 (FICA math, contact, citation)', as
             state: 'MO',
             zip_code: '65804',
             estimated_w2_count: 12,
-            headcount_confidence_score: 0.85,
+            headcount_confidence_score: 1.0,
             dm_name: 'Sarah Jenkins',
             dm_title: 'Practice Administrator',
             source_url: 'https://midwestdental.com/about',
@@ -268,7 +268,7 @@ test('batch_ingest_prospects executes Gate 4 (FICA math, contact, citation)', as
   assert.equal(company.status, 'ACTIVE');
   assert.equal(company.qualification_status, 'QUALIFIED');
   assert.equal(company.verification_status, 'FIELD_VERIFIED');
-  assert.equal(company.headcount_confidence_score, 0.85);
+  assert.equal(company.headcount_confidence_score, 1.0);
   assert.equal(company.estimated_w2_count, 12);
   assert.ok(company.est_fica_tax_savings > 0);
   assert.equal(company.access_type, 'OPEN_COMMERCIAL');
@@ -294,7 +294,7 @@ test('batch_ingest_prospects enforces maximum batch size of 25', async () => {
     business_name: `Company ${i + 1}`,
     street_address: `${100 + i} Main St`,
     estimated_w2_count: 10,
-    headcount_confidence_score: 0.8,
+    headcount_confidence_score: 1.0,
     source_url: 'https://example.com/source'
   }));
 
