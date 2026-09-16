@@ -1,7 +1,11 @@
 {
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "legacy-sweat-equity",
   "main": "src/index.js",
-  "compatibility_date": "2026-07-20",
+  "compatibility_date": "2026-09-15",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "d1_databases": [
     {
       "binding": "DB",

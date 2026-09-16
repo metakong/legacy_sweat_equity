@@ -9,6 +9,14 @@ node_modules/
 .env
 mapbox_token.txt
 
+# Python cache & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+scripts/__pycache__/
+data/
+
 # PII & Data Exports (CRITICAL FOR PUBLIC REPO)
 roofing-archive-2026-08-29.sql
 *.sql

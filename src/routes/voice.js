@@ -159,12 +159,16 @@ export async function handleVoiceDebrief(c) {
   // another field visit. Best effort: a storage hiccup must never cost the log.
   const filename = `voice-${crypto.randomUUID()}.${audioExtensionFor(audio.type)}`;
   if (c.env.BUCKET && c.env.STORE_AUDIO !== '0') {
-    try {
-      await c.env.BUCKET.put(filename, await audio.arrayBuffer(), {
+    const audioBufPromise = audio.arrayBuffer().then(buf =>
+      c.env.BUCKET.put(filename, buf, {
         httpMetadata: { contentType: audio.type || 'audio/webm' }
-      });
-    } catch (err) {
-      console.error('R2 voice archive failed (non-fatal):', err);
+      })
+    ).catch(err => console.error('R2 voice archive failed (non-fatal):', err));
+
+    if (c.executionCtx?.waitUntil) {
+      c.executionCtx.waitUntil(audioBufPromise);
+    } else {
+      await audioBufPromise;
     }
   }
 
