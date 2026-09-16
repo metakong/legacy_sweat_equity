@@ -50,6 +50,18 @@ import { scrapeMissouriSosEntity } from './routes/enrich.js';
 const app = new Hono();
 
 // ---------------------------------------------------------------------
+// GLOBAL ERROR & NOT FOUND HANDLERS
+// ---------------------------------------------------------------------
+app.onError((err, c) => {
+  console.error(`[Worker Error] ${err}`);
+  return c.json({ error: 'Internal Server Error', details: err.message }, 500, SECURITY_HEADERS);
+});
+
+app.notFound((c) => {
+  return c.json({ error: 'Route not found' }, 404, SECURITY_HEADERS);
+});
+
+// ---------------------------------------------------------------------
 // SECURITY + CORS
 // ---------------------------------------------------------------------
 app.use('*', async (c, next) => {
