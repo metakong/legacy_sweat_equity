@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS companies (
     sync_version INTEGER DEFAULT 1,
     updated_at_utc TEXT DEFAULT (datetime('now')),
     created_at TEXT DEFAULT (datetime('now')),
+    door_key TEXT,
     agent_email TEXT NOT NULL DEFAULT 'sean_deardorff@us.aflac.com',
     PRIMARY KEY (company_id, agent_email)
 );
@@ -209,6 +210,9 @@ WHERE status = 'ACTIVE' AND lat IS NOT NULL AND long IS NOT NULL;
 -- Phase 2 Edge Blueprint: Hard scoring gates & curbside access indexes
 CREATE INDEX IF NOT EXISTS idx_companies_qualification ON companies(agent_email, qualification_status, status);
 CREATE INDEX IF NOT EXISTS idx_companies_access ON companies(agent_email, access_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_unique_door
+ON companies (agent_email, door_key)
+WHERE street_1 IS NOT NULL AND street_1 != '' AND door_key IS NOT NULL;
 
 
 -- ---------------------------------------------------------------------

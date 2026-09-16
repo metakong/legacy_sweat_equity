@@ -139,18 +139,27 @@ async function loadTargets() {
     const valid = (data.companies || []).filter((t) => t.lat !== null && t.long !== null);
     const missingCoords = (data.companies || []).length - valid.length;
 
+    // Guardrail: Cluster co-located records sharing rounded coordinates (5 decimal places ~ 1.1m)
+    const coordMap = new Map();
+    valid.forEach((t) => {
+      const key = `${Number(t.lat).toFixed(5)},${Number(t.long).toFixed(5)}`;
+      coordMap.set(key, (coordMap.get(key) || 0) + 1);
+    });
+
     // Calculate distance, EPV score, and compass quadrant for each target
     masterRouteTargets = valid.map((target) => {
       const distance = (userCoords && target.lat !== null && target.long !== null)
         ? haversineMiles(userCoords, target)
         : null;
+      const coordKey = `${Number(target.lat).toFixed(5)},${Number(target.long).toFixed(5)}`;
       return {
         ...target,
         distance,
         epv: calculateEpv(target, distance),
         quadrant: (userCoords && target.lat !== null && target.long !== null)
           ? getQuadrant(userCoords.lat, userCoords.long, target.lat, target.long)
-          : null
+          : null,
+        colocatedCount: coordMap.get(coordKey) || 1
       };
     });
 
@@ -374,7 +383,7 @@ function renderRouteTable() {
       children: [
         el('td', { className: 'col-check', children: [checkbox] }),
         td(target.company_name),
-        td([target.street_1, target.city].filter(Boolean).join(', ')),
+        td([target.street_1, target.city].filter(Boolean).join(', ') + (target.colocatedCount > 1 ? ` 🏢 (${target.colocatedCount})` : '')),
         td(distText),
         el('td', { children: [el('span', { className: 'pill pill-epv', text: epvText, attrs: { title: `EPV Score: ${epvText} (Industry risk multiplier: ${getIndustryMultiplier(target.industry)}x)` } })] }),
         td(target.employees ?? '—'),
@@ -457,10 +466,27 @@ function renderRoute(result, legTitle = null) {
     const points = result.sequence.map((stop) => [stop.lat, stop.long]);
     const group = L.layerGroup();
     L.polyline(points, { color: '#4d8af0', weight: 4, opacity: 0.8 }).addTo(group);
+    // Cluster co-located stops at identical/near-identical coordinates (5 decimal places ~ 1.1m)
+    const coordClusters = new Map();
     result.sequence.forEach((stop, index) => {
+      const lat = Number(stop.lat);
+      const lng = Number(stop.long);
+      const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+      if (!coordClusters.has(key)) {
+        coordClusters.set(key, { lat, lng, stops: [] });
+      }
+      coordClusters.get(key).stops.push({ stop, index });
+    });
+
+    coordClusters.forEach(({ lat, lng, stops: clusterStops }) => {
       const tooltip = document.createElement('span');
-      tooltip.textContent = `${index + 1}. ${stop.company_name || 'Stop'}`;
-      L.marker([stop.lat, stop.long])
+      if (clusterStops.length === 1) {
+        tooltip.textContent = `${clusterStops[0].index + 1}. ${clusterStops[0].stop.company_name || 'Stop'}`;
+      } else {
+        const labels = clusterStops.map((cs) => `${cs.index + 1}. ${cs.stop.company_name || 'Stop'}`).join(' & ');
+        tooltip.textContent = labels;
+      }
+      L.marker([lat, lng])
         .bindTooltip(tooltip, { permanent: false })
         .addTo(group);
     });

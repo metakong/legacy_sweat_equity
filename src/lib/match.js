@@ -268,3 +268,15 @@ export class CompanyMatcher {
     return { ambiguous: true, tier: 'name', candidates: viable };
   }
 }
+
+/**
+ * Canonical door key combining normalized name and normalized street address.
+ * Returns null if either component is missing, empty, or lacks numeric street digits.
+ */
+export function getDoorKey(companyName, street1) {
+  const name = normalizeName(companyName);
+  const street = normalizeStreet(street1);
+  if (!name || !street) return null;
+  return `${name} ${street}`;
+}
+

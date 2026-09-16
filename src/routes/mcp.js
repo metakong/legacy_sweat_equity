@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { McpServer } from '@cloudflare/mcp-server/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@cloudflare/mcp-server/server/webStandardStreamableHttp.js';
 import { businessDate, businessDayRangeUtc } from '../lib/time.js';
-import { CompanyMatcher } from '../lib/match.js';
+import { CompanyMatcher, getDoorKey } from '../lib/match.js';
 import { snoozeCompany, checkDncSuppression } from '../lib/db.js';
 import { getIndustryMultiplier, calculateEpv, buildIndustryHook, heuristicSequence, haversineMiles } from './routing.js';
 import { advanceCadence } from '../lib/cadence.js';
@@ -701,6 +701,16 @@ export function createMcpServer(env) {
       const BATCH_CHUNK_LIMIT = 25;
       const statements = [];
 
+      let matcher = null;
+      try {
+        const candidates = await env.DB.prepare(
+          'SELECT company_id, company_name, street_1, zip_code, account_number, d365_lead_id FROM companies WHERE agent_email = ?'
+        ).bind(DEFAULT_AGENT_EMAIL).all();
+        matcher = new CompanyMatcher(candidates?.results || []);
+      } catch (_) {
+        matcher = new CompanyMatcher([]);
+      }
+
       for (const p of prospects) {
         // Gate 1: Address & Citation Check
         const sourceUrl = typeof p.source_url === 'string' ? p.source_url.trim() : '';
@@ -746,19 +756,25 @@ export function createMcpServer(env) {
           samplePvp = smartCallingPvp;
         }
 
-        // Persistence
-        let existing = null;
-        try {
-          const bound = env.DB.prepare(
-            'SELECT company_id, sync_version FROM companies WHERE LOWER(company_name) = LOWER(?) AND agent_email = ? LIMIT 1'
-          ).bind(businessName, DEFAULT_AGENT_EMAIL);
-          existing = typeof bound.first === 'function'
-            ? await bound.first()
-            : (typeof bound.all === 'function' ? (await bound.all())?.results?.[0] : null);
-        } catch (_) {}
+        // Identity resolution via CompanyMatcher
+        const match = matcher.resolve({
+          company_name: businessName,
+          street_1: streetAddr,
+          zip_code: p.zip_code
+        });
 
-        const companyId = existing?.company_id || crypto.randomUUID();
-        const syncVersion = (existing?.sync_version || 1) + 1;
+        const companyId = match?.company_id || crypto.randomUUID();
+        if (!match?.company_id) {
+          matcher.add({
+            company_id: companyId,
+            company_name: businessName,
+            street_1: streetAddr,
+            zip_code: p.zip_code
+          });
+        }
+
+        const syncVersion = 1;
+        const doorKey = getDoorKey(businessName, streetAddr);
         const city = (p.city || 'Springfield').trim();
         const state = (p.state || 'MO').trim();
         const zip = p.zip_code ? p.zip_code.trim() : null;
@@ -778,16 +794,17 @@ export function createMcpServer(env) {
               industry, lead_source, rating, pipeline_stage, status, verification_status,
               qualification_status, headcount_confidence_score, confidence_score,
               decision_maker, notes, estimated_w2_count, est_fica_tax_savings,
-              sync_version, access_type, agent_email, updated_at_utc, created_at
+              sync_version, access_type, door_key, agent_email, updated_at_utc, created_at
             ) VALUES (
               ?, ?, ?, ?, ?, ?,
               ?, 'MCP Ingest', 'Warm', 'PROSPECT', 'ACTIVE', 'FIELD_VERIFIED',
               'QUALIFIED', ?, ?,
               ?, ?, ?, ?,
-              ?, 'OPEN_COMMERCIAL', ?, datetime('now'), datetime('now')
+              ?, 'OPEN_COMMERCIAL', ?, ?, datetime('now'), datetime('now')
             )
-            ON CONFLICT(company_id, agent_email) DO UPDATE SET
+            ON CONFLICT(agent_email, door_key) WHERE street_1 IS NOT NULL AND street_1 != '' AND door_key IS NOT NULL DO UPDATE SET
               company_name = excluded.company_name,
+              door_key = excluded.door_key,
               street_1 = excluded.street_1,
               city = excluded.city,
               state = excluded.state,
@@ -823,6 +840,7 @@ export function createMcpServer(env) {
             w2Count,
             fica.employer_fica_savings,
             syncVersion,
+            doorKey,
             DEFAULT_AGENT_EMAIL
           )
         );

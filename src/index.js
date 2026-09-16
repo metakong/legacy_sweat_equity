@@ -29,6 +29,7 @@ import {
   isHtmlResponse
 } from './lib/security.js';
 import { businessDate, businessDayRangeUtc } from './lib/time.js';
+import { CompanyMatcher, getDoorKey } from './lib/match.js';
 
 import companiesRouter, { contacts as contactsRouter, enums as enumsRouter, importRouter } from './routes/companies.js';
 import activityRouter, { root as activityRootRouter, audio as audioRouter } from './routes/activity.js';
@@ -553,6 +554,16 @@ export async function runChunkedProcessing(env) {
   let survivedCount = 0;
   let failedCount = 0;
 
+  let matcher = null;
+  try {
+    const candidates = await env.DB.prepare(
+      'SELECT company_id, company_name, street_1, zip_code, account_number, d365_lead_id FROM companies WHERE agent_email = ?'
+    ).bind(DEFAULT_AGENT_EMAIL).all();
+    matcher = new CompanyMatcher(candidates?.results || []);
+  } catch (_) {
+    matcher = new CompanyMatcher([]);
+  }
+
   for (const target of batch) {
     const businessName = (target.business_name || '').trim();
     const address = (target.address || 'Springfield, MO').trim();
@@ -596,16 +607,26 @@ export async function runChunkedProcessing(env) {
       `PVP: ${smart_calling_pvp}`
     ].filter(Boolean).join('\n');
 
-    // Check if company already exists
-    let existingCompany = null;
-    try {
-      existingCompany = await env.DB.prepare(
-        'SELECT company_id, sync_version FROM companies WHERE LOWER(company_name) = LOWER(?) AND agent_email = ? LIMIT 1'
-      ).bind(businessName, DEFAULT_AGENT_EMAIL).first();
-    } catch (_) {}
+    // Identity resolution via CompanyMatcher
+    const match = matcher.resolve({
+      company_name: businessName,
+      street_1: address
+    });
 
-    const companyId = existingCompany?.company_id || crypto.randomUUID();
-    const syncVersion = (existingCompany?.sync_version || 1) + 1;
+    const companyId = match?.company_id || crypto.randomUUID();
+    if (!match?.company_id) {
+      matcher.add({
+        company_id: companyId,
+        company_name: businessName,
+        street_1: address
+      });
+    }
+    const syncVersion = 1;
+    const doorKey = getDoorKey(businessName, address);
+
+    const conflictClause = (doorKey && address)
+      ? "ON CONFLICT(agent_email, door_key) WHERE street_1 IS NOT NULL AND street_1 != '' AND door_key IS NOT NULL DO UPDATE SET"
+      : "ON CONFLICT(company_id, agent_email) DO UPDATE SET";
 
     // 5. Batch insert directly into active companies table
     statements.push(
@@ -615,16 +636,18 @@ export async function runChunkedProcessing(env) {
           industry, lead_source, rating, pipeline_stage, status, verification_status,
           confidence_score, decision_maker, notes,
           estimated_w2_count, est_fica_tax_savings,
-          sync_version, agent_email, updated_at_utc, created_at
+          sync_version, door_key, agent_email, updated_at_utc, created_at
         ) VALUES (
           ?, ?, ?, ?, ?, ?,
           ?, 'Cold Call', 'Warm', 'PROSPECT', 'ACTIVE', 'UNVERIFIED',
           60, ?, ?,
           ?, ?,
-          ?, ?, datetime('now'), datetime('now')
+          ?, ?, ?, datetime('now'), datetime('now')
         )
-        ON CONFLICT(company_id, agent_email) DO UPDATE SET
+        ${conflictClause}
           company_name = excluded.company_name,
+          door_key = excluded.door_key,
+          street_1 = excluded.street_1,
           decision_maker = excluded.decision_maker,
           notes = excluded.notes,
           est_fica_tax_savings = excluded.est_fica_tax_savings,
@@ -643,6 +666,7 @@ export async function runChunkedProcessing(env) {
         headcount,
         fica.employer_fica_savings,
         syncVersion,
+        doorKey,
         DEFAULT_AGENT_EMAIL
       )
     );

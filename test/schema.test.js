@@ -155,6 +155,10 @@ function buildMigratedDb() {
   for (const statement of statementsOf('migrations/0010_phase2_defenses.sql')) {
     raw.exec(statement);
   }
+  // 0011 adds door_key and idx_companies_unique_door
+  for (const statement of statementsOf('migrations/0011_deduplicate_and_enforce_door_uniqueness.sql')) {
+    raw.exec(statement);
+  }
   raw.close();
   return file;
 }

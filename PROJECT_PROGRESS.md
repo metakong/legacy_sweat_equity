@@ -4,6 +4,33 @@
 
 > **Note**: Everything below the 2026-08-29 entry describes **Legacy Sweat Equity**, the
 > B2C roofing canvassing app this project used to be. It is retained as history only.
+## 2026-09-16 18:00 CDT — Forensic Deduplication, Door Uniqueness Hardening & Route Planner Co-Location
+
+### Summary
+Executed full stabilization and architectural hardening against data duplication in the Route Planner and Cloudflare D1 production database (`legacy-db` `847928be-c56f-4de4-bff4-083e08db9140`):
+1. **Phase 1: Data Consolidation & Orphan Rescue (`scripts/dedupe_migration.py`)**:
+   - Identified 12 duplicate clusters (30 records) in remote D1 resulting from unconstrained UPSERTs and slight name variations.
+   - Re-parented all `contacts` and `activity_logs` from duplicate IDs to canonical IDs (0 records orphaned).
+   - Deleted 18 redundant company records and cleaned non-address placeholder strings (`"Springfield, MO"` and `"Springfield, MO (HQ)"`) to `NULL`.
+   - Total active companies in D1 stabilized at 559 rows.
+2. **Phase 2: Schema Hardening & Architectural Constraints (`migrations/0011_deduplicate_and_enforce_door_uniqueness.sql` & `schema.sql`)**:
+   - Added standard column `door_key TEXT` to `companies`.
+   - Executed `scripts/apply_phase2_migration.py` against remote D1: computed normalized door keys (`normalizeName(company_name) + ' ' + normalizeStreet(street_1)`) for all 559 existing accounts.
+   - Verified 471 physical doors with 0 duplicate key collisions.
+   - Applied partial unique index:
+     `CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_unique_door ON companies (agent_email, door_key) WHERE street_1 IS NOT NULL AND street_1 != '' AND door_key IS NOT NULL;`
+   - Verified schema and index presence in remote D1 `sqlite_master`.
+3. **Phase 3: Codebase Patching & Ingestion Pipeline Hardening**:
+   - `src/lib/match.js`: Exported `getDoorKey(companyName, street1)`.
+   - `src/lib/db.js`: Updated `normalizeCompany()` to compute `door_key`, and `buildCompanyStatement()` to bind `door_key` and execute `ON CONFLICT(agent_email, door_key) WHERE street_1 IS NOT NULL AND street_1 != '' AND door_key IS NOT NULL DO UPDATE SET` (falling back to `ON CONFLICT(company_id, agent_email)` when street address is null).
+   - `src/routes/mcp.js`: Updated `batch_ingest_prospects` to resolve existing companies via `CompanyMatcher`, batch-collapse duplicates, and bind `door_key`.
+   - `src/index.js`: Updated `runChunkedProcessing` overnight cron to resolve prospects via `CompanyMatcher` and bind `door_key`.
+   - `public/app/desktop.js`: Added coordinate clustering guardrails in `loadTargets()` to flag co-located accounts (`colocatedCount`), and consolidated map markers in `renderRoute()` so stops sharing identical coordinates share a single map pin with a combined tooltip.
+4. **Phase 4: Testing & Deployment**:
+   - Added test suite `test/door_dedupe.test.js` covering canonical key generation, null fallbacks, primitives coercion, and D1 UPSERT conflict interception.
+   - Updated `test/schema.test.js` to execute migration `0011`.
+   - Verified 398 passed, 0 failed (`npm test`).
+
 ## 2026-09-15 18:30 CDT — Zero-Defect Data Purge & MCP Gate Hardening (100% Headcount Confidence Floor)
 
 ### Summary

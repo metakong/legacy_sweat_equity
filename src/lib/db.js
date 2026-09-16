@@ -31,7 +31,7 @@ import {
 } from './validate.js';
 import { toSqlTimestamp } from './time.js';
 import { encodeGeohash } from './geo.js';
-import { normalizeName } from './match.js';
+import { normalizeName, getDoorKey } from './match.js';
 
 /** A field is invalid in a way the caller must be told about. */
 export class ValidationError extends Error {
@@ -86,13 +86,17 @@ export function normalizeCompany(raw) {
   const qualificationStatus = matchEnum(raw?.qualification_status, ['QUALIFIED', 'SUB_THRESHOLD', 'NEEDS_AUDIT', 'QUARANTINE']) || 'QUALIFIED';
   const accessType = matchEnum(raw?.access_type, ['OPEN_COMMERCIAL', 'LOCKED_DOOR_PHONE_ONLY', 'GATED_SECURITY', 'APPOINTMENT_ONLY']) || 'OPEN_COMMERCIAL';
 
+  const street1 = cleanCapped(raw?.street_1, LIMITS.street) || null;
+  const doorKey = getDoorKey(companyName, street1);
+
   return {
     company_id: companyId,
     d365_lead_id: cleanCapped(raw?.d365_lead_id, LIMITS.d365Id) || null,
     d365_checksum: cleanCapped(raw?.d365_checksum, LIMITS.checksum) || null,
     d365_modified_on: cleanCapped(raw?.d365_modified_on, 64) || null,
     company_name: companyName,
-    street_1: cleanCapped(raw?.street_1, LIMITS.street) || null,
+    door_key: doorKey,
+    street_1: street1,
     street_2: cleanCapped(raw?.street_2, LIMITS.street) || null,
     city: cleanCapped(raw?.city, LIMITS.city) || null,
     state: cleanCapped(raw?.state, LIMITS.state) || null,
@@ -179,6 +183,14 @@ export function normalizeCompany(raw) {
  */
 export function buildCompanyStatement(db, company, userEmail) {
   userEmail = userEmail ?? 'sean_deardorff@us.aflac.com';
+  const doorKey = company.door_key !== undefined
+    ? company.door_key
+    : getDoorKey(company.company_name, company.street_1);
+
+  const conflictClause = (doorKey && company.street_1)
+    ? "ON CONFLICT(agent_email, door_key) WHERE street_1 IS NOT NULL AND street_1 != '' AND door_key IS NOT NULL DO UPDATE SET"
+    : "ON CONFLICT(company_id, agent_email) DO UPDATE SET";
+
   return db.prepare(`
     INSERT INTO companies (
       company_id, d365_lead_id, d365_checksum, d365_modified_on, company_name,
@@ -192,16 +204,17 @@ export function buildCompanyStatement(db, company, userEmail) {
       estimated_w2_count, confidence_score, geohash, status,
       next_action, next_action_date, sync_version,
       headcount_confidence_score, qualification_status, access_type,
-      agent_email
+      door_key, agent_email
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
-    ON CONFLICT(company_id, agent_email) DO UPDATE SET
+    ${conflictClause}
       d365_lead_id        = COALESCE(excluded.d365_lead_id, companies.d365_lead_id),
       d365_checksum       = COALESCE(excluded.d365_checksum, companies.d365_checksum),
       d365_modified_on    = COALESCE(excluded.d365_modified_on, companies.d365_modified_on),
       company_name        = excluded.company_name,
+      door_key            = COALESCE(excluded.door_key, companies.door_key),
       street_1            = COALESCE(excluded.street_1, companies.street_1),
       street_2            = COALESCE(excluded.street_2, companies.street_2),
       city                = COALESCE(excluded.city, companies.city),
@@ -293,6 +306,7 @@ export function buildCompanyStatement(db, company, userEmail) {
     company.headcount_confidence_score ?? 0.0,
     company.qualification_status ?? 'QUALIFIED',
     company.access_type ?? 'OPEN_COMMERCIAL',
+    doorKey ?? null,
     userEmail,
     company.__has_current_voluntary_carrier ?? 0,
     company.__has_major_medical_carrier ?? 0,
