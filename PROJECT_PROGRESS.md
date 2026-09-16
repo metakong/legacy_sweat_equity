@@ -2363,3 +2363,21 @@ Execute a complete code-level upgrade, structural modernization, and zero-trust 
    - Created `scripts/google_workspace_sync.py` and `scripts/Run_EOD_Sync.bat` (plus desktop shortcut) to automate hybrid D1 database backups, EOD pipeline sweeps, Google Tasks/Calendar callback staging, and Workspace Studio "Gmail Auto Import" flows.
    - Verified that Gemini Spark MCP tools (`/api/mcp` and `/api/oauth/*`) remain fully operational for real-time canvassing manifests, lead enrichment, and Section 125 Aflac proposal drafts.
 
+---
+
+## 2026-09-16 17:30 CDT — Autonomous Security Remediation, D1 DNC Ingestion & Edge Hardening
+
+### Summary
+Executed complete autonomous remediation and deployment across the Git tree, Cloudflare D1 production database, and Cloudflare Worker edge:
+1. **Git Object & Secret Hygiene**:
+   - Verified `.env` and `.dev.vars` ignore isolation (`.gitignore`).
+   - Expired all Git reflogs (`git reflog expire --expire=now --all`) and pruned unreferenced objects (`git gc --prune=now`). Permanently removed dangling commit `18a93d9` from local Git database.
+2. **Production D1 DNC Batch Deployment**:
+   - Deployed `data/dnc_seed_batch.sql` (911 statements) to remote Cloudflare D1 (`legacy-db` `847928be-c56f-4de4-bff4-083e08db9140`).
+   - Remote `do_not_contact` table updated from 0 to 911 rows: 906 `ZERO_TRUST_DNC_IMPORT` records + 5 `CORPORATE_DNC_IMPORT` records.
+3. **Edge Worker Error & 404 Boundaries**:
+   - Injected global `app.onError()` and `app.notFound()` in `src/index.js` ensuring 500 and 404 responses return structured JSON with complete `SECURITY_HEADERS`.
+   - Verified test suite: 394 passed, 0 failed (`npm test`).
+   - Pushed commit `df4a1a6` to `origin/main`.
+   - Deployed live to Cloudflare edge via `npm run deploy` (Version ID: `2a6e7f6d-849d-4bda-a02c-0f129c288b9f`).
+
